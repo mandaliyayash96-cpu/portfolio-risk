@@ -25,20 +25,26 @@ import {
   YAxis,
 } from 'recharts'
 
+import { useChartColors } from '../theme-context'
 import { percent } from '../format'
 
-const CURRENT_COLOR = '#b91c1c'
-const MIN_VAR_COLOR = '#047857'
-const MAX_SHARPE_COLOR = '#7c3aed'
-const FRONTIER_COLOR = '#94a3b8'
+// Marker and frontier colours come from src/theme.js per theme; see
+// `frontier` there.
 
 /** Percentage points, e.g. 0.1816 -> 0.1754 is "-0.62 pp". */
 const points = (from, to) => (to - from) * 100
 
-/** A larger, outlined dot so a single marked portfolio reads over the curve. */
-function Marker({ cx, cy, fill }) {
+/**
+ * A larger, outlined dot so a single marked portfolio reads over the curve.
+ *
+ * The outline is the PANEL colour, not white: it exists to punch the marker out
+ * of whatever sits behind it, which in dark mode is a near-black card. Recharts
+ * clones this element with the scatter's props, so `surface` is passed in by
+ * the caller rather than read from context here.
+ */
+function Marker({ cx, cy, fill, surface }) {
   if (cx == null || cy == null) return null
-  return <circle cx={cx} cy={cy} r={7} fill={fill} stroke="#ffffff" strokeWidth={2} />
+  return <circle cx={cx} cy={cy} r={7} fill={fill} stroke={surface} strokeWidth={2} />
 }
 
 function FrontierTooltip({ active, payload }) {
@@ -76,6 +82,8 @@ function WeightRow({ ticker, current, suggested }) {
 }
 
 export default function RebalanceCard({ data, error, isLoading }) {
+  const colors = useChartColors()
+
   if (isLoading && !data) {
     return (
       <section className="panel">
@@ -186,21 +194,21 @@ export default function RebalanceCard({ data, error, isLoading }) {
         <div className="rebalance__right">
           <ResponsiveContainer width="100%" height={300}>
             <ScatterChart margin={{ top: 12, right: 20, bottom: 16, left: 4 }}>
-              <CartesianGrid stroke="var(--border-soft)" />
+              <CartesianGrid stroke={colors.grid} />
               <XAxis
                 type="number"
                 dataKey="risk"
                 name="Risk"
                 domain={['dataMin - 0.004', 'dataMax + 0.004']}
                 tickFormatter={(value) => `${(value * 100).toFixed(0)}%`}
-                tick={{ fill: 'var(--ink-muted)', fontSize: 12 }}
+                tick={{ fill: colors.axis, fontSize: 12 }}
                 tickLine={false}
-                axisLine={{ stroke: 'var(--border)' }}
+                axisLine={{ stroke: colors.axisLine }}
                 label={{
                   value: 'Risk (annualised volatility)',
                   position: 'insideBottom',
                   offset: -6,
-                  fill: 'var(--ink-muted)',
+                  fill: colors.axis,
                   fontSize: 12,
                 }}
               />
@@ -210,39 +218,45 @@ export default function RebalanceCard({ data, error, isLoading }) {
                 name="Return"
                 domain={['dataMin - 0.01', 'dataMax + 0.01']}
                 tickFormatter={(value) => `${(value * 100).toFixed(0)}%`}
-                tick={{ fill: 'var(--ink-muted)', fontSize: 12 }}
+                tick={{ fill: colors.axis, fontSize: 12 }}
                 tickLine={false}
                 axisLine={false}
                 width={54}
               />
-              <Tooltip content={<FrontierTooltip />} cursor={{ strokeDasharray: '3 3' }} />
+              <Tooltip
+                content={<FrontierTooltip />}
+                cursor={{ strokeDasharray: '3 3', stroke: colors.axisLine }}
+              />
+              {/* No colour needed here: Recharts resolves each legend label to
+                  its own series colour (DefaultLegendContent falls back to
+                  `entry.color`), and those are already theme-aware. */}
               <Legend verticalAlign="top" height={28} iconType="circle" />
               <Scatter
                 name="Efficient frontier"
                 data={frontier}
-                fill={FRONTIER_COLOR}
-                line={{ stroke: FRONTIER_COLOR, strokeWidth: 2 }}
+                fill={colors.frontier.curve}
+                line={{ stroke: colors.frontier.curve, strokeWidth: 2 }}
                 isAnimationActive={false}
               />
               <Scatter
                 name="Current"
                 data={currentPoint}
-                fill={CURRENT_COLOR}
-                shape={<Marker />}
+                fill={colors.frontier.current}
+                shape={<Marker surface={colors.surface} />}
                 isAnimationActive={false}
               />
               <Scatter
                 name="Min variance"
                 data={minVariancePoint}
-                fill={MIN_VAR_COLOR}
-                shape={<Marker />}
+                fill={colors.frontier.minVariance}
+                shape={<Marker surface={colors.surface} />}
                 isAnimationActive={false}
               />
               <Scatter
                 name="Max Sharpe"
                 data={maxSharpePoint}
-                fill={MAX_SHARPE_COLOR}
-                shape={<Marker />}
+                fill={colors.frontier.maxSharpe}
+                shape={<Marker surface={colors.surface} />}
                 isAnimationActive={false}
               />
             </ScatterChart>

@@ -8,23 +8,12 @@
 
 import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 
+import { useChartColors } from '../theme-context'
 import { money, percent } from '../format'
 
-/**
- * A categorical ramp that stays distinguishable on a washed-out projector and
- * in greyscale print. Deliberately not the red/green used for risk tone -
- * allocation slices carry no good/bad meaning.
- */
-const SLICE_COLORS = [
-  '#2563eb',
-  '#0891b2',
-  '#7c3aed',
-  '#c2410c',
-  '#0f766e',
-  '#a21caf',
-  '#4d7c0f',
-  '#b45309',
-]
+// The categorical ramp lives in src/theme.js, which holds a separate set of
+// hues for dark mode - the light ramp's deeper blues and teals go muddy against
+// a near-black panel.
 
 function SliceTooltip({ active, payload }) {
   if (!active || !payload?.length) return null
@@ -39,6 +28,8 @@ function SliceTooltip({ active, payload }) {
 }
 
 export default function AllocationPie({ holdings = [] }) {
+  const colors = useChartColors()
+
   const data = holdings.map((holding) => ({
     ...holding,
     // Recharts needs a number to size the arc; `weight` is already a fraction.
@@ -63,16 +54,20 @@ export default function AllocationPie({ holdings = [] }) {
               innerRadius={58}
               outerRadius={104}
               paddingAngle={2}
-              stroke="#ffffff"
+              stroke={colors.surface}
               strokeWidth={2}
               isAnimationActive={false}
               label={({ ticker, weight }) => `${ticker} ${percent(weight, 1)}`}
               labelLine={false}
+              // Recharts defaults slice labels to a near-black fill, which is
+              // invisible on a dark panel. These sit OUTSIDE the arcs, on the
+              // card, so they take the body ink rather than the slice colour.
+              fill={colors.axis}
             >
               {data.map((holding, index) => (
                 <Cell
                   key={holding.ticker}
-                  fill={SLICE_COLORS[index % SLICE_COLORS.length]}
+                  fill={colors.categorical[index % colors.categorical.length]}
                 />
               ))}
             </Pie>

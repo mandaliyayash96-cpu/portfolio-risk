@@ -5,6 +5,36 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Portfolio Risk Dashboard</title>
+    <!--
+      Stamp the theme BEFORE the first paint.
+
+      React cannot do this job. The bundle is fetched, parsed and mounted after
+      the browser has already painted the page, so a dark-mode user would get a
+      white flash on every load and every refresh - which on a projector in a
+      darkened room is the most visible thing on screen. This runs synchronously
+      in <head>, so the very first paint is already the right colour.
+
+      Kept deliberately tiny and dependency-free: it duplicates
+      resolveInitialTheme() from src/theme.js, and that is the trade for having
+      it run this early. Keep the two in step.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = window.localStorage.getItem('portfolio-risk:theme')
+          var theme =
+            stored === 'light' || stored === 'dark'
+              ? stored
+              : window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+          document.documentElement.dataset.theme = theme
+          document.documentElement.style.colorScheme = theme
+        } catch (error) {
+          document.documentElement.dataset.theme = 'light'
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>
