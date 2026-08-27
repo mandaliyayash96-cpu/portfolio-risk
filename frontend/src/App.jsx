@@ -11,11 +11,12 @@
 
 import { useEffect, useState } from 'react'
 
-import { getRiskReport } from './api/client'
+import { getRebalance, getRiskReport } from './api/client'
 import AllocationPie from './components/AllocationPie'
 import CorrelationHeatmap from './components/CorrelationHeatmap'
 import Header from './components/Header'
 import HoldingsTable from './components/HoldingsTable'
+import RebalanceCard from './components/RebalanceCard'
 import RiskCards from './components/RiskCards'
 import VarChart from './components/VarChart'
 
@@ -31,6 +32,11 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [lastUpdated, setLastUpdated] = useState(null)
+  // The rebalance suggestion is tracked separately on purpose: it is the
+  // optional half of the page, so its failure must never take the risk report
+  // down with it.
+  const [rebalance, setRebalance] = useState(null)
+  const [rebalanceError, setRebalanceError] = useState(null)
   // Bumped by Retry to re-run the effect below - the one honest way to say
   // "do that again" to an effect.
   const [attempt, setAttempt] = useState(0)
@@ -42,20 +48,32 @@ export default function App() {
     let ignore = false
 
     async function load() {
-      try {
-        const data = await getRiskReport(PORTFOLIO_ID)
-        if (ignore) return
-        setReport(data)
+      // allSettled, not all: one endpoint failing must not discard the other's
+      // result. Both are fetched on the same tick so the two panels always
+      // describe the same moment.
+      const [riskOutcome, rebalanceOutcome] = await Promise.allSettled([
+        getRiskReport(PORTFOLIO_ID),
+        getRebalance(PORTFOLIO_ID),
+      ])
+      if (ignore) return
+
+      if (riskOutcome.status === 'fulfilled') {
+        setReport(riskOutcome.value)
         setError(null)
         setLastUpdated(new Date())
-      } catch (caught) {
-        if (!ignore) setError(caught)
-      } finally {
-        if (!ignore) {
-          setIsLoading(false)
-          setIsRefreshing(false)
-        }
+      } else {
+        setError(riskOutcome.reason)
       }
+
+      if (rebalanceOutcome.status === 'fulfilled') {
+        setRebalance(rebalanceOutcome.value)
+        setRebalanceError(null)
+      } else {
+        setRebalanceError(rebalanceOutcome.reason)
+      }
+
+      setIsLoading(false)
+      setIsRefreshing(false)
     }
 
     load()
@@ -76,6 +94,7 @@ export default function App() {
   const retry = () => {
     setIsLoading(true)
     setError(null)
+    setRebalanceError(null)
     setAttempt((count) => count + 1)
   }
 
@@ -130,6 +149,8 @@ export default function App() {
       ))}
 
       <RiskCards report={report} />
+
+      <RebalanceCard data={rebalance} error={rebalanceError} isLoading={isLoading} />
 
       <div className="grid grid--halves">
         <AllocationPie holdings={report.portfolio?.holdings} />

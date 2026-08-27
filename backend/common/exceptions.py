@@ -114,6 +114,20 @@ class MissingPriceDataError(DomainError):
     message = "No stored price data for one or more tickers."
 
 
+class OptimizationError(DomainError):
+    """
+    The optimiser could not solve for a portfolio.
+
+    Rare and worth surfacing honestly: the inputs were valid enough to build a
+    covariance matrix but SLSQP failed to converge on them. The report endpoint
+    is unaffected, so this never means "your risk numbers are wrong".
+    """
+
+    code = "optimization_failed"
+    status_code = http_status.HTTP_422_UNPROCESSABLE_ENTITY
+    message = "Could not compute an optimal allocation for this portfolio."
+
+
 class InsufficientHistoryError(DomainError):
     """
     The tickers have price history, but too little of it OVERLAPS to compute

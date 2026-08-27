@@ -50,16 +50,16 @@ function transportError(error) {
 }
 
 /**
- * GET /api/risk/<id>/ -> the RiskReport payload (the envelope's `data`).
+ * GET one enveloped endpoint and hand back its `data`.
  *
  * @throws {ApiError} with the backend's message for a business failure
- *   (not_found / empty_portfolio / missing_price_data / insufficient_history),
- *   or a fix-it message when the API could not be reached at all.
+ *   (not_found / empty_portfolio / missing_price_data / insufficient_history /
+ *   optimization_failed), or a fix-it message when the API was unreachable.
  */
-export async function getRiskReport(portfolioId) {
+async function getEnveloped(path) {
   let response
   try {
-    response = await api.get(`/api/risk/${portfolioId}/`)
+    response = await api.get(path)
   } catch (error) {
     // A 4xx/5xx still carries a perfectly good envelope - prefer its message.
     const envelope = error.response?.data
@@ -84,4 +84,18 @@ export async function getRiskReport(portfolioId) {
     })
   }
   return envelope.data
+}
+
+/** The full risk report for a portfolio. */
+export function getRiskReport(portfolioId) {
+  return getEnveloped(`/api/risk/${portfolioId}/`)
+}
+
+/**
+ * The Markowitz rebalance suggestion for the same portfolio: current weights
+ * and volatility, the minimum-variance and maximum-Sharpe allocations, and the
+ * efficient frontier they sit on.
+ */
+export function getRebalance(portfolioId) {
+  return getEnveloped(`/api/rebalance/${portfolioId}/`)
 }

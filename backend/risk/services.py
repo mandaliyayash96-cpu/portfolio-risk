@@ -25,7 +25,11 @@ Pipeline
                                                         join, so every return
                                                         spans the same interval)
                             ---> split off the benchmark column
-                            ---> engine.build_report
+                            ---> engine.build_report     (compute_risk)
+                            ---> risk.optimizer          (compute_rebalance)
+
+Both endpoints share `_prepare()`, so they cannot disagree about the window,
+the valuation or the join.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+import numpy as np
 import pandas as pd
 from django.conf import settings
 
@@ -41,6 +46,7 @@ from common.exceptions import (
     InsufficientHistoryError,
     InvalidInputError,
     MissingPriceDataError,
+    OptimizationError,
 )
 from marketdata.selectors import (
     CLOSE_COLUMN,
@@ -51,7 +57,7 @@ from marketdata.selectors import (
 )
 from portfolio.models import Holding, Portfolio
 from portfolio.selectors import get_holdings, get_portfolio
-from risk import engine
+from risk import engine, optimizer
 
 ZERO = Decimal("0")
 
@@ -117,6 +123,174 @@ def compute_risk(
         InsufficientHistoryError (422): too little overlapping history.
         InvalidInputError (400):        the portfolio values at zero.
     """
+    prepared = _prepare(portfolio_id, days=days, min_observations=min_observations)
+
+    report = engine.build_report(
+        prepared.holding_returns,
+        prepared.weights,
+        benchmark_returns=prepared.benchmark_returns,
+        rf=prepared.rf_per_period,
+        trading_days=prepared.trading_days,
+        conf=conf,
+    )
+
+    report["portfolio"] = _portfolio_block(
+        prepared.portfolio, prepared.positions, prepared.weights
+    )
+    report["benchmark"] = {
+        "ticker": prepared.benchmark_ticker or None,
+        "included": prepared.benchmark_included,
+    }
+    report["warnings"] = list(prepared.warnings)
+    return report
+
+
+def compute_rebalance(
+    portfolio_id: int,
+    *,
+    days: int = DEFAULT_HISTORY_DAYS,
+    min_observations: int = MIN_OBSERVATIONS,
+    n_points: int = optimizer.DEFAULT_FRONTIER_POINTS,
+) -> dict:
+    """
+    What the same holdings would look like at better weights.
+
+    Runs on the SAME prepared inputs as `compute_risk` - same valuation, same
+    inner join, same returns matrix - so the "current volatility" here is the
+    identical number the risk report shows and the comparison against the
+    suggestion is honest. Nothing is re-fetched or re-aligned.
+
+    Only the WEIGHTS change. No ticker is added or dropped: a suggestion the
+    investor cannot act on with what they already own is not a suggestion.
+
+    Args:
+        portfolio_id: primary key from the URL.
+        days, min_observations: as `compute_risk`; keep them in step if you
+            override either, or the two endpoints describe different windows.
+        n_points: how many efficient-frontier samples to return.
+
+    Returns:
+        dict with keys:
+            portfolio, tickers, observations, start, end
+            current       {weights, volatility, expected_return, sharpe}
+            min_variance  {weights, volatility, expected_return, sharpe}
+            max_sharpe    {weights, volatility, expected_return, sharpe}
+            efficient_frontier  [{risk, return}, ...]
+            params, warnings
+
+        Every risk and return figure is ANNUALISED (see `_annualise_return`),
+        matching the risk report, so the two pages never disagree about units.
+
+    Raises:
+        The same four as `compute_risk` (not found / empty / missing prices /
+        insufficient history), plus OptimizationError (422) if a solve fails.
+    """
+    prepared = _prepare(portfolio_id, days=days, min_observations=min_observations)
+
+    returns = prepared.holding_returns
+    tickers = [str(column) for column in returns.columns]
+    trading_days = prepared.trading_days
+    rf = prepared.rf_per_period
+
+    # Per-period moments, exactly as the engine produces them. Annualisation
+    # happens once, on the way out - never in storage (engine convention).
+    covariance = engine.covariance_matrix(returns)
+    means = returns.mean().to_numpy(dtype="float64")
+
+    try:
+        min_variance = optimizer.min_variance_weights(covariance)
+        max_sharpe = optimizer.max_sharpe_weights(means, covariance, rf=rf)
+        frontier = optimizer.efficient_frontier(means, covariance, n_points=n_points)
+    except ValueError as exc:
+        raise OptimizationError(
+            f"Could not solve for an optimal allocation of {', '.join(tickers)}: {exc}",
+            details={"tickers": tickers},
+        ) from exc
+
+    def describe(weights) -> dict:
+        """One allocation, measured with the same functions the report uses."""
+        vector = np.asarray(weights, dtype="float64")
+        return {
+            "weights": {ticker: float(weight) for ticker, weight in zip(tickers, vector)},
+            "volatility": engine.portfolio_volatility(vector, covariance, trading_days),
+            "expected_return": _annualise_return(float(vector @ means), trading_days),
+            "sharpe": engine.sharpe(
+                engine.portfolio_return_series(returns, vector),
+                rf=rf,
+                trading_days=trading_days,
+            ),
+        }
+
+    warnings = list(prepared.warnings)
+    if len(tickers) < 2:
+        warnings.append(
+            "This portfolio holds a single ticker, so there are no weights to "
+            "optimise - diversification needs at least two holdings."
+        )
+
+    return {
+        "portfolio": {
+            "id": prepared.portfolio.pk,
+            "name": prepared.portfolio.name,
+            "base_currency": prepared.portfolio.base_currency,
+        },
+        "tickers": tickers,
+        "observations": int(len(returns)),
+        "start": str(returns.index[0]),
+        "end": str(returns.index[-1]),
+        "current": describe(prepared.weights),
+        "min_variance": describe(min_variance),
+        "max_sharpe": describe(max_sharpe),
+        "efficient_frontier": [
+            {
+                "risk": point["risk"] * float(np.sqrt(trading_days)),
+                "return": _annualise_return(point["return"], trading_days),
+            }
+            for point in frontier
+        ],
+        "params": {
+            "rf_per_period": rf,
+            "rf_annual": float(settings.RISK_FREE_RATE),
+            "trading_days": trading_days,
+            "n_points": int(n_points),
+        },
+        "warnings": warnings,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Shared preparation - the reason both endpoints agree
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class _Prepared:
+    """
+    Everything either endpoint needs, built exactly once and identically.
+
+    Both `compute_risk` and `compute_rebalance` start here, so the rebalance
+    page cannot drift into a different window, a different valuation or a
+    different inner join from the risk page. Sharing this object is what makes
+    "current volatility" mean the same thing on both.
+    """
+
+    portfolio: Portfolio
+    positions: list[_Position]
+    weights: list[float]
+    holding_returns: pd.DataFrame  # columns ordered to match `weights`
+    benchmark_ticker: str
+    benchmark_returns: pd.Series | None
+    benchmark_included: bool
+    warnings: list[str]
+    trading_days: int
+    rf_per_period: float
+
+
+def _prepare(portfolio_id: int, *, days: int, min_observations: int) -> _Prepared:
+    """
+    Portfolio -> valued positions -> weights -> aligned returns matrix.
+
+    Every DomainError the two endpoints raise about data originates here, which
+    is why they report identical messages for identical problems.
+    """
     portfolio = get_portfolio(portfolio_id)
     positions = _value_positions(portfolio)
     weights = _weights(positions)
@@ -133,20 +307,38 @@ def compute_risk(
     benchmark_returns = returns[benchmark] if benchmark_included else None
 
     trading_days = int(settings.TRADING_DAYS_PER_YEAR)
-    report = engine.build_report(
-        holding_returns,
-        weights,
+    return _Prepared(
+        portfolio=portfolio,
+        positions=positions,
+        weights=weights,
+        holding_returns=holding_returns,
+        benchmark_ticker=benchmark,
         benchmark_returns=benchmark_returns,
-        # The engine wants a PER-PERIOD rate; the setting is annualised.
-        rf=float(settings.RISK_FREE_RATE) / trading_days,
+        benchmark_included=benchmark_included,
+        warnings=warnings,
         trading_days=trading_days,
-        conf=conf,
+        # The engine wants a PER-PERIOD rate; the setting is annualised.
+        rf_per_period=float(settings.RISK_FREE_RATE) / trading_days,
     )
 
-    report["portfolio"] = _portfolio_block(portfolio, positions, weights)
-    report["benchmark"] = {"ticker": benchmark or None, "included": benchmark_included}
-    report["warnings"] = warnings
-    return report
+
+def _annualise_return(per_period: float, trading_days: int) -> float:
+    """
+    Compound a per-period expected return into an annual one.
+
+    Formula:
+        r_annual = (1 + r_period) ** trading_days - 1
+
+    Geometric, not `r * trading_days`: the risk report already presents
+    annualised return as compounded growth, and two different annualisation
+    conventions on one dashboard is worse than either one alone. A period return
+    at or below -100% cannot be compounded, so it degrades to the arithmetic
+    form rather than producing a complex number.
+    """
+    if per_period <= -1.0:
+        return float(per_period * trading_days)
+    grown = (1.0 + per_period) ** trading_days - 1.0
+    return float(grown) if np.isfinite(grown) else float(per_period * trading_days)
 
 
 # ---------------------------------------------------------------------------

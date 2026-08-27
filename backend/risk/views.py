@@ -16,7 +16,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from risk.services import compute_risk
+from risk.services import compute_rebalance, compute_risk
 
 
 @api_view(["GET"])
@@ -39,3 +39,20 @@ def risk_report(request, portfolio_id: int):
     endpoint never calls the market data provider itself.
     """
     return Response(compute_risk(portfolio_id))
+
+
+@api_view(["GET"])
+# Same posture as the risk report above; the same TODO applies.
+@permission_classes([AllowAny])
+def rebalance_report(request, portfolio_id: int):
+    """
+    GET /api/rebalance/<portfolio_id>/
+
+    Markowitz mean-variance suggestion for the SAME holdings: the current
+    weights and their volatility, the minimum-variance and maximum-Sharpe
+    allocations with theirs, and the efficient frontier the three sit on.
+
+    Computed from the same prepared inputs as /api/risk/, so the "current"
+    figures here match that report exactly.
+    """
+    return Response(compute_rebalance(portfolio_id))
