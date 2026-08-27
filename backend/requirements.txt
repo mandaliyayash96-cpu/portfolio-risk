@@ -1,0 +1,26 @@
+# Phase 1 — installed and in use.
+Django==6.1
+djangorestframework==3.18.0
+
+# Phase 2 — market data. Nothing outside marketdata/ may import yfinance.
+# yfinance==0.2.*
+
+# Phase 3 — risk engine. Pure NumPy/Pandas/SciPy, no Django.
+# numpy==2.*
+# pandas==2.*
+# scipy==1.*
+# pytest==8.*
+# pytest-django==4.*
+
+# Phase 6 — async + realtime.
+# celery==5.*
+# redis==5.*
+# django-celery-beat==2.*
+# channels[daphne]==4.*
+# channels-redis==4.*
+
+# Phase 7 — React dev server talks to this API cross-origin.
+# django-cors-headers==4.*
+
+# Later — PostgreSQL.
+# psycopg[binary]==3.*
