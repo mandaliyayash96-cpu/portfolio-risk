@@ -46,8 +46,8 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     "rest_framework",
+    "corsheaders",  # the Vite dev server on :5173 is a cross-origin caller
     # TODO Phase 6: "channels" (WebSocket alert feed)
-    # TODO Phase 7: "corsheaders" (React dev server on :5173)
 ]
 
 LOCAL_APPS = [
@@ -62,8 +62,12 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # As high as possible, and necessarily above CommonMiddleware: CORS headers
+    # must be attached even to responses that CommonMiddleware short-circuits
+    # (an APPEND_SLASH redirect), or the browser reports a CORS failure instead
+    # of the real status.
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
-    # TODO Phase 7: "corsheaders.middleware.CorsMiddleware" goes above CommonMiddleware
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -131,6 +135,32 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": None,  # TODO Phase 4: paginate transaction history
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
 }
+
+
+# ---------------------------------------------------------------------------
+# CORS - development only.
+#
+# The React dashboard runs on the Vite dev server at :5173 while the API runs at
+# :8000. Different port means different origin, so the browser preflights every
+# XHR and drops the response unless the API opts that origin in.
+#
+# Both spellings of localhost are listed because "localhost" and "127.0.0.1" are
+# distinct origins to a browser, and Vite prints the first while some setups
+# open the second.
+# ---------------------------------------------------------------------------
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+# Cookies are not sent cross-origin: the API is AllowAny for now and the
+# dashboard authenticates with nothing. Flipping this on later (for session
+# auth from the SPA) also requires CSRF_TRUSTED_ORIGINS.
+CORS_ALLOW_CREDENTIALS = False
+
+# TODO Phase 8 (prod): serve the built SPA from the same origin as the API so
+# CORS stops applying at all, or read this list from an env var pinned to the
+# deployed domain. Never CORS_ALLOW_ALL_ORIGINS = True outside local dev.
 
 
 # ---------------------------------------------------------------------------
