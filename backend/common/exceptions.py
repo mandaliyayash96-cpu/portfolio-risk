@@ -88,8 +88,42 @@ class EmptyHistoryError(ProviderError):
     message = "No price history available for this ticker."
 
 
-# TODO Phase 3: InsufficientHistoryError(DomainError) -> 422, raised when a
-#               portfolio has too few aligned return observations to compute risk.
+class EmptyPortfolioError(DomainError):
+    """
+    The portfolio exists but holds nothing, so there is no exposure to measure.
+
+    Distinct from NotFoundError on purpose: "you asked for a portfolio that
+    does not exist" and "your portfolio is empty" are different fixes.
+    """
+
+    code = "empty_portfolio"
+    status_code = http_status.HTTP_400_BAD_REQUEST
+    message = "This portfolio has no holdings."
+
+
+class MissingPriceDataError(DomainError):
+    """
+    A held ticker has no stored price yet - nothing has been fetched for it.
+
+    Not a ProviderError: the feed was never asked. The fix is to run
+    `manage.py fetch_prices`, which is what the message says.
+    """
+
+    code = "missing_price_data"
+    status_code = http_status.HTTP_422_UNPROCESSABLE_ENTITY
+    message = "No stored price data for one or more tickers."
+
+
+class InsufficientHistoryError(DomainError):
+    """
+    The tickers have price history, but too little of it OVERLAPS to compute
+    risk: statistics over an inner-joined window need that window to exist and
+    to be long enough for ddof=1 sample estimates to mean anything.
+    """
+
+    code = "insufficient_history"
+    status_code = http_status.HTTP_422_UNPROCESSABLE_ENTITY
+    message = "Not enough overlapping price history to compute risk."
 
 
 # ---------------------------------------------------------------------------

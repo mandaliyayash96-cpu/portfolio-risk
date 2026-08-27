@@ -84,6 +84,45 @@ def get_history_df(ticker: str, days: int = DEFAULT_HISTORY_DAYS) -> pd.DataFram
     return pd.DataFrame({CLOSE_COLUMN: closes}, index=index)
 
 
+def get_latest_close(ticker: str) -> Decimal | None:
+    """
+    The most recent stored daily close for `ticker`, or None if nothing is
+    stored.
+
+    Returns Decimal, so callers valuing a position stay exact (common/MONEY.md).
+    This is the fallback price source when PriceSnapshot is empty - history was
+    fetched with --skip-live, or the live leg of the poll failed for a symbol.
+    """
+    symbol = (ticker or "").strip().upper()
+    if not symbol:
+        return None
+    return (
+        PriceHistory.objects.filter(ticker=symbol)
+        .order_by("-date")
+        .values_list("close", flat=True)
+        .first()
+    )
+
+
+def get_latest_closes(tickers: list[str]) -> dict[str, Decimal]:
+    """
+    Most recent stored close per ticker: {ticker: Decimal}.
+
+    Tickers with no stored history are simply absent from the mapping, matching
+    `get_latest_prices`. One small indexed query per ticker: SQLite has no
+    DISTINCT ON, and a portfolio holds tens of symbols, not thousands.
+    """
+    result: dict[str, Decimal] = {}
+    for raw in tickers or []:
+        symbol = (raw or "").strip().upper()
+        if not symbol or symbol in result:
+            continue
+        close = get_latest_close(symbol)
+        if close is not None:
+            result[symbol] = close
+    return result
+
+
 def get_stored_tickers() -> list[str]:
     """Every ticker with at least one stored daily close, alphabetically."""
     return list(
@@ -91,5 +130,7 @@ def get_stored_tickers() -> list[str]:
     )
 
 
-# TODO Phase 3: price_history_frame(tickers, days) -> one wide DataFrame,
-#               inner-joined across tickers so the risk engine gets aligned rows.
+# No wide multi-ticker frame lives here on purpose: the inner join across
+# tickers is `risk.engine.align_returns`, which is pure and unit-tested.
+# `risk/services.py` loops `get_history_df` and hands the result to it, so the
+# join has exactly one implementation.

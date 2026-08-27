@@ -55,7 +55,7 @@ LOCAL_APPS = [
     "portfolio",    # Portfolio / Holding / Transaction
     "marketdata",   # PriceSnapshot / PriceHistory  (+ provider interface in Phase 2)
     "alerts",       # AlertRule / AlertEvent        (+ scan task in Phase 6)
-    # TODO Phase 3: "risk" — pure engine + optimizer + risk services
+    "risk",         # pure engine + risk services   (+ optimizer in Phase 5)
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS

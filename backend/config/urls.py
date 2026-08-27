@@ -1,8 +1,9 @@
 """
 Root URL configuration.
 
-Phase 1 exposes the admin plus a single health endpoint that proves the
-{success, data, error} envelope is wired end to end.
+Phase 1 exposed the admin plus a health endpoint proving the
+{success, data, error} envelope is wired end to end; Phase 4 adds the risk
+report at /api/risk/<portfolio_id>/.
 """
 
 from django.contrib import admin
@@ -13,7 +14,7 @@ urlpatterns = [
     path("api/", include("common.urls")),
     # TODO Phase 2: path("api/marketdata/", include("marketdata.urls"))
     # TODO Phase 4: path("api/portfolios/", include("portfolio.urls"))
-    # TODO Phase 4: path("api/risk/", include("risk.urls"))
+    path("api/risk/", include("risk.urls")),
     # TODO Phase 6: path("api/alerts/", include("alerts.urls"))
 ]
 

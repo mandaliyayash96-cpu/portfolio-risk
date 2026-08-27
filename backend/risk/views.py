@@ -1,0 +1,41 @@
+"""
+Risk API.
+
+Architecture rule 1 in its purest form: this view does no ORM work and no
+maths. It takes an id off the URL, calls the service, and hands the dict back.
+
+The envelope is not built here either - `common.renderers.EnvelopeJSONRenderer`
+wraps the success case and `common.exceptions.custom_exception_handler` wraps
+every DomainError the service raises, so all four failure modes
+(not_found / empty_portfolio / missing_price_data / insufficient_history)
+arrive as {"success": false, "data": null, "error": {...}} with the right
+status code, never as a 500.
+"""
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+from risk.services import compute_risk
+
+
+@api_view(["GET"])
+# Hackathon MVP: open so the report is testable in a browser. The portfolio is
+# somebody's actual position, so this cannot ship open.
+# TODO Phase 4 (auth): IsAuthenticated, and scope the lookup to request.user in
+#      portfolio.selectors.get_portfolio so ids cannot be enumerated.
+@permission_classes([AllowAny])
+def risk_report(request, portfolio_id: int):
+    """
+    GET /api/risk/<portfolio_id>/
+
+    Returns the full RiskReport for the portfolio: annualised return and
+    volatility, beta against the benchmark, Sharpe, Sortino, max drawdown, VaR
+    (historical / parametric / Monte Carlo), CVaR, HHI, per-asset volatility
+    and the correlation/covariance matrices - plus which portfolio it is and
+    how it was valued.
+
+    Prices come from whatever `manage.py fetch_prices` last stored; this
+    endpoint never calls the market data provider itself.
+    """
+    return Response(compute_risk(portfolio_id))

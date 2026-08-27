@@ -2,10 +2,12 @@
 Risk mathematics.
 
 `engine.py` is pure (NumPy/pandas/SciPy only) and must stay importable without
-Django. This package is therefore NOT a Django app yet - nothing here needs the
-app registry.
+Django - `tests/test_engine.py::TestEnginePurity` enforces it, so nothing may
+be imported at this package level.
 
-TODO Phase 4: services.py reads settings, loads holdings + price history via
-              selectors, and calls engine.build_report.
+    engine.py    pure maths, no Django (architecture rule 2)
+    services.py  ORM + settings + engine, the only impure layer
+    views.py     thin DRF view over services
+
 TODO Phase 5: optimizer.py - min_variance_weights(cov), efficient_frontier(...).
 """
