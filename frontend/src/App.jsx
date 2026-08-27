@@ -17,12 +17,13 @@
 
 import { useEffect, useState } from 'react'
 
-import { getRebalance, getRiskReport } from './api/client'
+import { getPerformance, getRebalance, getRiskReport } from './api/client'
 import AlertsPanel from './components/AlertsPanel'
 import AllocationPie from './components/AllocationPie'
 import CorrelationHeatmap from './components/CorrelationHeatmap'
 import Header from './components/Header'
 import HoldingsTable from './components/HoldingsTable'
+import PerformancePanel from './components/PerformancePanel'
 import RebalanceCard from './components/RebalanceCard'
 import RiskCards from './components/RiskCards'
 import VarChart from './components/VarChart'
@@ -44,6 +45,10 @@ export default function App() {
   // down with it.
   const [rebalance, setRebalance] = useState(null)
   const [rebalanceError, setRebalanceError] = useState(null)
+  // Same arrangement for the performance curve, and for the same reason: the
+  // value chart leads the page, but it must not be able to take the page down.
+  const [performance, setPerformance] = useState(null)
+  const [performanceError, setPerformanceError] = useState(null)
   // Bumped by Retry to re-run the effect below - the one honest way to say
   // "do that again" to an effect.
   const [attempt, setAttempt] = useState(0)
@@ -58,9 +63,10 @@ export default function App() {
       // allSettled, not all: one endpoint failing must not discard the other's
       // result. Both are fetched on the same tick so the two panels always
       // describe the same moment.
-      const [riskOutcome, rebalanceOutcome] = await Promise.allSettled([
+      const [riskOutcome, rebalanceOutcome, performanceOutcome] = await Promise.allSettled([
         getRiskReport(PORTFOLIO_ID),
         getRebalance(PORTFOLIO_ID),
+        getPerformance(PORTFOLIO_ID),
       ])
       if (ignore) return
 
@@ -77,6 +83,13 @@ export default function App() {
         setRebalanceError(null)
       } else {
         setRebalanceError(rebalanceOutcome.reason)
+      }
+
+      if (performanceOutcome.status === 'fulfilled') {
+        setPerformance(performanceOutcome.value)
+        setPerformanceError(null)
+      } else {
+        setPerformanceError(performanceOutcome.reason)
       }
 
       setIsLoading(false)
@@ -102,6 +115,7 @@ export default function App() {
     setIsLoading(true)
     setError(null)
     setRebalanceError(null)
+    setPerformanceError(null)
     setAttempt((count) => count + 1)
   }
 
@@ -154,6 +168,8 @@ export default function App() {
           {warning}
         </p>
       ))}
+
+      <PerformancePanel data={performance} error={performanceError} isLoading={isLoading} />
 
       <RiskCards report={report} />
 

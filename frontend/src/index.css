@@ -927,6 +927,58 @@ code {
   font-weight: 500;
 }
 
+/* ---------------------------------------------------------------------------
+   Performance panel
+   --------------------------------------------------------------------------- */
+
+/* Three reference figures under the panel title. Deliberately small: the charts
+   below are the subject, and a row of big numbers would compete with them. */
+.performance__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin-top: 12px;
+}
+
+.performance__stat dt {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.performance__stat dd {
+  margin-top: 2px;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--ink);
+  /* Tabular so the three columns keep their positions as the poll updates them;
+     these are aligned figures in a row, not a standalone hero number. */
+  font-variant-numeric: tabular-nums;
+}
+
+.performance__stat--bad dd {
+  color: var(--bad);
+}
+
+/* The per-chart title. A <p>, not a heading: the panel already has an <h2>, and
+   two charts inside one card are not two sections of the document. */
+.performance__caption {
+  padding: 4px 10px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+/* The second caption separates two stacked plots, so it needs air above it that
+   the first one - sitting directly under the panel head - does not. */
+.performance__caption + * + .performance__caption {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+
 .panel__placeholder {
   display: flex;
   flex-direction: column;

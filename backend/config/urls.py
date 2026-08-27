@@ -19,7 +19,8 @@ urlpatterns = [
     path("api/", include("common.urls")),
     # TODO Phase 2: path("api/marketdata/", include("marketdata.urls"))
     # TODO Phase 4: path("api/portfolios/", include("portfolio.urls"))
-    path("api/", include("risk.urls")),  # /api/risk/<id>/ and /api/rebalance/<id>/
+    # /api/risk/<id>/, /api/rebalance/<id>/ and /api/performance/<id>/
+    path("api/", include("risk.urls")),
     # Rule config and acknowledgement. The alert FEED is not here - it is a
     # WebSocket, routed by alerts/routing.py through config/asgi.py.
     path("api/alerts/", include("alerts.urls")),

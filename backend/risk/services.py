@@ -68,6 +68,11 @@ ZERO = Decimal("0")
 #: this; callers can lower it (the tests do) with compute_risk(min_observations=).
 MIN_OBSERVATIONS = 20
 
+#: Where the performance curve starts. 100 is the convention for a rebased
+#: index: the chart is then about SHAPE - growth and drawdown - and no point on
+#: it can be mistaken for a rupee valuation of the portfolio.
+REBASE_VALUE = 100.0
+
 #: What to tell the user when data is missing. One string, one fix.
 _FETCH_HINT = "Run `python manage.py fetch_prices` first."
 
@@ -258,6 +263,96 @@ def compute_rebalance(
     }
 
 
+def compute_performance(
+    portfolio_id: int,
+    *,
+    days: int = DEFAULT_HISTORY_DAYS,
+    min_observations: int = MIN_OBSERVATIONS,
+    start_value: float = REBASE_VALUE,
+) -> dict:
+    """
+    The portfolio's value and drawdown at every date in the window.
+
+    Where `compute_risk` reduces the window to a handful of scalars, this
+    endpoint keeps the time axis: the same returns, compounded into a curve,
+    plus how far below its own running peak that curve sat on each date.
+
+    Runs on the SAME `_prepare` as the other two endpoints - same valuation,
+    same inner join, same window - so the last point of this curve describes
+    the same day the risk report describes, and `max_drawdown` below is
+    literally the figure that report shows rather than a second computation of
+    it. Nothing is re-fetched and nothing is re-aligned.
+
+    Args:
+        portfolio_id: primary key from the URL.
+        days, min_observations: as `compute_risk`; keep them in step if you
+            override either, or the pages describe different windows.
+        start_value: where the rebased curve begins (see REBASE_VALUE).
+
+    Returns:
+        dict with keys:
+            portfolio     {id, name, base_currency}
+            dates         ["YYYY-MM-DD", ...] - one per observation
+            equity_curve  [float, ...] rebased so the window opens near
+                          `start_value` (see `engine.portfolio_equity_curve`
+                          for why "near" and not "exactly")
+            drawdown_series  [float, ...] PERCENT, e.g. -12.34, never positive
+            peak_value, current_value  points on `equity_curve`, for the
+                          summary line above the chart
+            max_drawdown  FRACTION and negative (-0.25 = a 25% fall), matching
+                          the risk report's key of the same name; it equals
+                          min(drawdown_series) / 100 by construction
+            start_value, observations, start, end, warnings
+
+        The three lists are parallel and equal-length, which is what lets the
+        frontend zip them into one chart without an index lookup.
+
+        Every value is JSON-safe: no NaN, no inf.
+
+    Raises:
+        The same four as `compute_risk` - not found (404), empty portfolio
+        (400), missing price data (422), insufficient history (422) - because
+        all four originate in `_prepare`, which this shares.
+    """
+    prepared = _prepare(portfolio_id, days=days, min_observations=min_observations)
+
+    portfolio_returns = engine.portfolio_return_series(
+        prepared.holding_returns, prepared.weights
+    )
+    curve = engine.portfolio_equity_curve(portfolio_returns, start_value=start_value)
+    drawdowns = engine.drawdown_series(curve)
+
+    values = [_json_float(value) for value in curve.to_numpy(dtype="float64")]
+    # Percentage points, converted once here rather than in every consumer: the
+    # chart's y-axis is labelled in %, and a frontend that has to remember which
+    # of two series is a fraction will eventually forget.
+    underwater = [
+        _json_float(value * 100.0) for value in drawdowns.to_numpy(dtype="float64")
+    ]
+    dates = _iso_dates(curve.index)
+
+    return {
+        "portfolio": {
+            "id": prepared.portfolio.pk,
+            "name": prepared.portfolio.name,
+            "base_currency": prepared.portfolio.base_currency,
+        },
+        "dates": dates,
+        "equity_curve": values,
+        "drawdown_series": underwater,
+        "peak_value": max(values),
+        "current_value": values[-1],
+        # From the same curve the series above came from, so the deepest point
+        # of the underwater chart and this number cannot drift apart.
+        "max_drawdown": engine.max_drawdown(curve),
+        "start_value": float(start_value),
+        "observations": len(values),
+        "start": dates[0],
+        "end": dates[-1],
+        "warnings": list(prepared.warnings),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Shared preparation - the reason both endpoints agree
 # ---------------------------------------------------------------------------
@@ -320,6 +415,30 @@ def _prepare(portfolio_id: int, *, days: int, min_observations: int) -> _Prepare
         # The engine wants a PER-PERIOD rate; the setting is annualised.
         rf_per_period=float(settings.RISK_FREE_RATE) / trading_days,
     )
+
+
+def _json_float(value) -> float:
+    """
+    NaN/inf -> 0.0, so a response cannot carry a non-JSON constant.
+
+    The engine already guarantees this for its scalars (`_finite`), but the
+    performance curve is emitted as raw arrays rather than through
+    `build_report`, so the same floor is applied here on the way out.
+    """
+    number = float(value)
+    return number if np.isfinite(number) else 0.0
+
+
+def _iso_dates(index: pd.Index) -> list[str]:
+    """
+    A DatetimeIndex -> ["2026-01-05", ...].
+
+    `build_report` emits `str(timestamp)`, which carries a "00:00:00" a daily
+    series has no use for and the frontend trims again (see format.js:isoDate).
+    A chart axis wants the date and only the date, so it is formatted properly
+    once, here.
+    """
+    return [pd.Timestamp(stamp).strftime("%Y-%m-%d") for stamp in index]
 
 
 def _annualise_return(per_period: float, trading_days: int) -> float:

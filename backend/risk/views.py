@@ -16,7 +16,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from risk.services import compute_rebalance, compute_risk
+from risk.services import compute_performance, compute_rebalance, compute_risk
 
 
 @api_view(["GET"])
@@ -56,3 +56,21 @@ def rebalance_report(request, portfolio_id: int):
     figures here match that report exactly.
     """
     return Response(compute_rebalance(portfolio_id))
+
+
+@api_view(["GET"])
+# Same posture as the two reports above; the same TODO applies.
+@permission_classes([AllowAny])
+def performance_report(request, portfolio_id: int):
+    """
+    GET /api/performance/<portfolio_id>/
+
+    The portfolio's history rather than its summary: a value curve rebased to
+    100 and the drawdown at every date on it, plus the peak, the current value
+    and the max drawdown for reference.
+
+    Built from the same prepared inputs as /api/risk/, so the max drawdown here
+    is the identical number that report shows and the last point of the curve
+    is the same day.
+    """
+    return Response(compute_performance(portfolio_id))

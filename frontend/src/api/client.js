@@ -126,3 +126,17 @@ export function getRiskReport(portfolioId) {
 export function getRebalance(portfolioId) {
   return getEnveloped(`/api/rebalance/${portfolioId}/`)
 }
+
+/**
+ * The same window as the risk report, with its time axis kept: a value curve
+ * rebased to 100, the drawdown at every date on it, and the peak, current
+ * value and max drawdown for reference.
+ *
+ * `dates`, `equity_curve` and `drawdown_series` are parallel arrays of equal
+ * length - zip them by index. `drawdown_series` is in PERCENT (-12.34) while
+ * `max_drawdown` is the fraction (-0.1234) the risk report uses, so the axis
+ * and the headline figure each get the units they want.
+ */
+export function getPerformance(portfolioId) {
+  return getEnveloped(`/api/performance/${portfolioId}/`)
+}

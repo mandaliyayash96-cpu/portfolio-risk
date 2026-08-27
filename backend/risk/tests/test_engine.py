@@ -31,9 +31,11 @@ from risk.engine import (
     covariance_matrix,
     cvar,
     daily_returns,
+    drawdown_series,
     equity_curve,
     hhi,
     max_drawdown,
+    portfolio_equity_curve,
     portfolio_return_series,
     portfolio_volatility,
     sharpe,
@@ -378,6 +380,108 @@ class TestMaxDrawdown:
 
     def test_single_point_is_zero(self):
         assert max_drawdown(np.array([100.0])) == 0.0
+
+
+class TestPortfolioEquityCurve:
+    def test_rebases_to_the_start_value(self):
+        """A flat return series stays exactly at 100 - no drift from cumprod."""
+        curve = portfolio_equity_curve(np.zeros(10))
+        assert np.allclose(curve, 100.0)
+
+    def test_opens_one_return_above_the_start_value(self):
+        """
+        The documented off-by-one, pinned: a return series has no row for the
+        day it is measured FROM, so the first point is already 100 * (1 + r_0).
+        """
+        curve = portfolio_equity_curve(np.array([0.05, 0.0, 0.0]))
+        assert curve[0] == pytest.approx(105.0)
+
+    def test_monotonic_when_every_return_is_positive(self):
+        curve = portfolio_equity_curve(np.array([0.01, 0.02, 0.005, 0.03, 0.001]))
+        assert np.all(np.diff(curve) > 0)
+
+    def test_matches_equity_curve_scaled(self, normal_returns):
+        """It IS equity_curve with a different initial - not a reimplementation."""
+        assert np.allclose(
+            portfolio_equity_curve(normal_returns, start_value=100.0),
+            100.0 * equity_curve(normal_returns, initial=1.0),
+        )
+
+    def test_length_matches_the_returns(self, normal_returns):
+        assert len(portfolio_equity_curve(normal_returns)) == len(normal_returns)
+
+    def test_series_in_series_out(self):
+        returns = pd.Series([0.01, -0.02, 0.03], index=_dates(3))
+        curve = portfolio_equity_curve(returns)
+        assert isinstance(curve, pd.Series)
+        assert curve.index.equals(returns.index)
+
+    def test_start_value_only_scales(self):
+        """Drawdown and shape are scale-invariant, so the constant must be too."""
+        returns = np.array([0.01, -0.04, 0.02])
+        assert np.allclose(
+            portfolio_equity_curve(returns, start_value=250.0),
+            2.5 * portfolio_equity_curve(returns, start_value=100.0),
+        )
+
+
+class TestDrawdownSeries:
+    def test_hand_computed(self):
+        # Peaks at 100 and 120; the trough at 90 is 25% below the 120 peak.
+        series = drawdown_series(np.array([100.0, 120.0, 90.0, 150.0]))
+        assert series == pytest.approx([0.0, 0.0, -0.25, 0.0])
+
+    def test_is_zero_at_every_new_peak(self):
+        series = drawdown_series(np.array([100.0, 110.0, 120.0, 130.0]))
+        assert np.all(series == 0.0)
+
+    def test_is_never_positive(self, normal_returns):
+        """The defining property: a curve is never ABOVE its own running peak."""
+        series = drawdown_series(portfolio_equity_curve(normal_returns))
+        assert np.all(series <= 0.0)
+
+    def test_minimum_equals_max_drawdown(self, normal_returns):
+        """
+        The contract the Performance panel rests on. Exact equality, not
+        approx: both are computed from the same running peak, so a discrepancy
+        of any size means the two have drifted apart.
+        """
+        curve = portfolio_equity_curve(normal_returns)
+        assert float(np.min(drawdown_series(curve))) == max_drawdown(curve)
+
+    def test_minimum_equals_max_drawdown_on_a_hand_case(self):
+        curve = np.array([100.0, 120.0, 90.0, 150.0])
+        assert float(np.min(drawdown_series(curve))) == max_drawdown(curve)
+
+    def test_length_matches_the_returns(self, normal_returns):
+        curve = portfolio_equity_curve(normal_returns)
+        assert len(drawdown_series(curve)) == len(curve) == len(normal_returns)
+
+    def test_series_in_series_out(self):
+        curve = pd.Series([100.0, 90.0, 95.0], index=_dates(3))
+        series = drawdown_series(curve)
+        assert isinstance(series, pd.Series)
+        assert series.index.equals(curve.index)
+        assert series.name == "drawdown"
+
+    def test_scale_invariant(self, normal_returns):
+        """Rebasing changes the curve's units, never its drawdown."""
+        assert np.allclose(
+            drawdown_series(portfolio_equity_curve(normal_returns, start_value=100.0)),
+            drawdown_series(portfolio_equity_curve(normal_returns, start_value=1.0)),
+        )
+
+    def test_total_loss_is_minus_one(self):
+        assert drawdown_series(np.array([100.0, 0.0]))[-1] == pytest.approx(-1.0)
+
+    def test_single_point_is_zero_like_max_drawdown(self):
+        series = drawdown_series(np.array([100.0]))
+        assert series == pytest.approx([0.0])
+        assert float(np.min(series)) == max_drawdown(np.array([100.0]))
+
+    def test_nan_input_raises(self):
+        with pytest.raises(ValueError):
+            drawdown_series(np.array([100.0, np.nan, 90.0]))
 
 
 # ---------------------------------------------------------------------------

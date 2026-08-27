@@ -261,6 +261,39 @@ def equity_curve(returns: Any, initial: float = 1.0) -> Any:
     return curve
 
 
+def portfolio_equity_curve(portfolio_returns: Any, start_value: float = 100.0) -> Any:
+    """
+    A portfolio's return series compounded into a REBASED wealth index.
+
+    Formula:
+        V_t = start_value * prod_(s<=t) ( 1 + r_s )
+
+    This is `equity_curve` with a conventional starting value instead of 1.0
+    and nothing else - the compounding lives in one place. Rebasing to 100
+    makes the curve unit-free, so a chart of it can never be misread as a rupee
+    valuation and two portfolios of very different size still share one axis.
+
+    Assumptions:
+        - Input is the PORTFOLIO return series (`portfolio_return_series`), not
+          the per-asset matrix.
+        - Weights are constant across the window and no cash moves in or out,
+          inherited from `portfolio_return_series`.
+        - The first point is the value AFTER the first return, so the curve
+          opens at start_value * (1 + r_0) rather than at start_value itself.
+          A return series has no row for the day it is measured FROM, and
+          `start_value` belongs to that prior close, which is outside the
+          window. This is deliberate rather than an off-by-one: it makes the
+          curve bit-for-bit the one `build_report` already hands to
+          `max_drawdown`, so an underwater chart drawn from it and the
+          max-drawdown figure on the report are the same number - not two that
+          nearly agree.
+
+    Returns:
+        Series (index preserved) when given a Series, else a 1-D array.
+    """
+    return equity_curve(portfolio_returns, initial=start_value)
+
+
 # ---------------------------------------------------------------------------
 # Dispersion
 # ---------------------------------------------------------------------------
@@ -478,6 +511,49 @@ def max_drawdown(equity: Any) -> float:
     with np.errstate(divide="ignore", invalid="ignore"):
         drawdowns = np.where(running_peak != 0, curve / running_peak - 1.0, 0.0)
     return _finite(np.min(drawdowns))
+
+
+def drawdown_series(equity: Any) -> Any:
+    """
+    Drawdown at EVERY date - the per-date form of `max_drawdown`.
+
+    Formula:
+        peak_t = max(V_0 .. V_t)
+        dd_t   = V_t / peak_t - 1
+
+    `max_drawdown` is min(dd_t) over exactly this array. The running peak, the
+    zero-peak guard and the non-finite fallback are written the same way here
+    on purpose, so that
+
+        min(drawdown_series(curve)) == max_drawdown(curve)
+
+    holds rather than nearly holds. test_engine.py asserts it, which is what
+    lets an "underwater" chart and the max-drawdown card quote one number.
+
+    Assumptions:
+        - Input is an EQUITY CURVE (cumulative wealth), not a return series -
+          build one with `equity_curve` or `portfolio_equity_curve`. The scale
+          is irrelevant; a drawdown is a ratio.
+        - Every value is NEGATIVE or zero, and exactly 0.0 at each new peak.
+          That is what pins the curve to the zero line at the highs and puts it
+          underwater everywhere else.
+        - Measured close-to-close, so an intraday trough is invisible.
+        - A non-finite ratio (a zero or infinite peak) degrades to 0.0 for that
+          date, mirroring what `_finite` does to the scalar.
+        - A single-point curve is its own peak, so the result is [0.0] - and
+          min() of it is 0.0, which is what `max_drawdown` returns there too.
+
+    Returns:
+        Series (index preserved) when given a Series, else a 1-D array.
+    """
+    curve = _as_1d(equity, name="equity")
+    running_peak = np.maximum.accumulate(curve)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        drawdowns = np.where(running_peak != 0, curve / running_peak - 1.0, 0.0)
+    drawdowns = np.where(np.isfinite(drawdowns), drawdowns, 0.0)
+    if isinstance(equity, pd.Series):
+        return pd.Series(drawdowns, index=equity.index, name="drawdown")
+    return drawdowns
 
 
 # ---------------------------------------------------------------------------
@@ -789,6 +865,7 @@ __all__ = [
     "align_returns",
     "portfolio_return_series",
     "equity_curve",
+    "portfolio_equity_curve",
     "covariance_matrix",
     "correlation_matrix",
     "annualized_volatility",
@@ -797,6 +874,7 @@ __all__ = [
     "sharpe",
     "sortino",
     "max_drawdown",
+    "drawdown_series",
     "var_historical",
     "var_parametric",
     "var_montecarlo",

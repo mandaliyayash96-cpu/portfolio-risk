@@ -115,6 +115,23 @@ export const CHART_COLORS = {
       '#b45309',
     ],
 
+    /**
+     * The Performance panel's two charts.
+     *
+     * `value` is --accent and `drawdown` is --bad, reused rather than invented:
+     * the underwater chart IS a risk chart, so it belongs in this dashboard's
+     * red/green risk vocabulary, and the value curve is the page's primary
+     * series exactly as the accent is its primary colour.
+     *
+     * `label` is body ink, for the callout on the deepest drawdown - a data
+     * label wears a text colour, never the series colour.
+     */
+    performance: {
+      value: '#1d4ed8', //     mirrors --accent
+      drawdown: '#b91c1c', //  mirrors --bad
+      label: '#0f172a', //     mirrors --ink
+    },
+
     /** The three VaR estimates. Ordered as they appear on the chart. */
     var: {
       historical: '#1d4ed8',
@@ -154,6 +171,12 @@ export const CHART_COLORS = {
       '#a3e635',
       '#fbbf24',
     ],
+
+    performance: {
+      value: '#60a5fa', //     mirrors --accent (dark)
+      drawdown: '#f87171', //  mirrors --bad (dark)
+      label: '#f1f5f9', //     mirrors --ink (dark)
+    },
 
     var: {
       historical: '#60a5fa',
