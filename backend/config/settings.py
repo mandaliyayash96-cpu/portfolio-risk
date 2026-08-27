@@ -186,6 +186,12 @@ LOGGING = {
 # yfinance symbol conventions: Indian equities carry a .NS suffix; the NIFTY 50
 # benchmark is ^NSEI. Nothing outside marketdata may import yfinance (rule 4).
 DEFAULT_BENCHMARK_TICKER = "^NSEI"
+
+# Swappable market data feed (architecture rule 4). Dotted path to a
+# MarketDataProvider subclass; tests point this at a stub.
+MARKET_DATA_PROVIDER = os.environ.get(
+    "MARKET_DATA_PROVIDER", "marketdata.providers.YFinanceProvider"
+)
 DEFAULT_BASE_CURRENCY = "INR"
 TRADING_DAYS_PER_YEAR = 252
 RISK_FREE_RATE = 0.065  # annualised; ~India 10Y G-Sec. TODO Phase 3: make configurable.

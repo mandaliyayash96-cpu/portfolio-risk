@@ -3,11 +3,11 @@ Django==6.1
 djangorestframework==3.18.0
 
 # Phase 2 — market data. Nothing outside marketdata/ may import yfinance.
-# yfinance==0.2.*
+yfinance==1.7.0
+pandas==3.0.5
+numpy==2.5.2
 
 # Phase 3 — risk engine. Pure NumPy/Pandas/SciPy, no Django.
-# numpy==2.*
-# pandas==2.*
 # scipy==1.*
 # pytest==8.*
 # pytest-django==4.*

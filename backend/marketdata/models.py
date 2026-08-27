@@ -20,24 +20,21 @@ from common.models import (
 
 class PriceSnapshot(TimeStampedModel):
     """
-    One polled live price for one ticker.
+    The current live price for one ticker: exactly one row per ticker, updated
+    in place on every poll (latest wins).
 
-    Append-only: the current price for a ticker is the row with the newest
-    `timestamp`. Keeping the history of polls costs nothing on SQLite and makes
-    intraday price-move alerts possible without a second table.
+    TODO Phase 6: price_move_pct alerts therefore cannot diff two snapshots -
+    compare this live price against the previous close in PriceHistory instead.
     """
 
-    ticker = models.CharField(max_length=TICKER_MAX_LENGTH, db_index=True)
+    ticker = models.CharField(max_length=TICKER_MAX_LENGTH, unique=True)
     price = models.DecimalField(max_digits=MONEY_MAX_DIGITS, decimal_places=MONEY_DECIMAL_PLACES)
-    timestamp = models.DateTimeField(help_text="Quote time reported by the provider (UTC).")
+    timestamp = models.DateTimeField(help_text="When this price was fetched (UTC).")
 
     class Meta:
-        ordering = ["-timestamp"]
+        ordering = ["ticker"]
         verbose_name = "price snapshot"
         verbose_name_plural = "price snapshots"
-        indexes = [
-            models.Index(fields=["ticker", "-timestamp"], name="snapshot_ticker_ts_idx"),
-        ]
 
     def __str__(self) -> str:
         return f"{self.ticker} @ {self.price} ({self.timestamp:%Y-%m-%d %H:%M})"

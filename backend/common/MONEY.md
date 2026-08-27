@@ -11,10 +11,12 @@ Architecture rule 5: pick one representation and document it. This is it.
 | `risk/engine.py`, NumPy/Pandas | `float64` | Vectorised math; NumPy cannot use Decimal without collapsing to object arrays. |
 | API responses (JSON) | `str` for money, `float` for ratios | DRF serialises `DecimalField` as a string by default — no precision lost in transit. |
 
-**Conversion happens exactly once**, in `risk/services.py`, when holdings and
-price history are turned into the weights vector `w` and the returns matrix `R`.
-`float(decimal_value)` on the way in; nothing converts back, because risk
-outputs (volatility, VaR, Sharpe, beta) are ratios and statistics, not money.
+**Conversion happens exactly once**, at the pandas boundary in
+`marketdata/selectors.py::get_history_df`, which reads Decimal closes out of the
+DB and emits a `float64` column. `risk/services.py` then builds the weights
+vector `w` and the returns matrix `R` from frames that are already float64.
+Nothing converts back, because risk outputs (volatility, VaR, Sharpe, beta) are
+ratios and statistics, not money.
 
 - No `float` is ever written to a money column.
 - No `Decimal` is ever handed to NumPy.

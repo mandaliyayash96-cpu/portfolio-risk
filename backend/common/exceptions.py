@@ -60,8 +60,34 @@ class ConflictError(DomainError):
     message = "The request conflicts with the current state."
 
 
-# TODO Phase 2: ProviderError(DomainError) -> 502, raised by marketdata providers
-#               when the upstream feed is unreachable or returns garbage.
+class ProviderError(DomainError):
+    """
+    The upstream market-data feed failed: unreachable, rate limited, or it
+    returned something unusable. Providers never let a raw yfinance/network
+    exception escape - everything is wrapped in this or a subclass.
+    """
+
+    code = "provider_error"
+    status_code = http_status.HTTP_502_BAD_GATEWAY
+    message = "Market data provider is unavailable."
+
+
+class UnknownTickerError(ProviderError):
+    """The symbol is not recognised by the provider (typo, or delisted)."""
+
+    code = "unknown_ticker"
+    status_code = http_status.HTTP_404_NOT_FOUND
+    message = "Unknown ticker."
+
+
+class EmptyHistoryError(ProviderError):
+    """The symbol resolved but the provider returned no price rows."""
+
+    code = "empty_history"
+    status_code = http_status.HTTP_422_UNPROCESSABLE_ENTITY
+    message = "No price history available for this ticker."
+
+
 # TODO Phase 3: InsufficientHistoryError(DomainError) -> 422, raised when a
 #               portfolio has too few aligned return observations to compute risk.
 
