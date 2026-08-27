@@ -35,6 +35,13 @@ ALLOWED_HOSTS = [
 # ---------------------------------------------------------------------------
 # Applications
 # ---------------------------------------------------------------------------
+# Daphne must come FIRST in INSTALLED_APPS, ahead of django.contrib.staticfiles.
+# Its AppConfig is what replaces `runserver` with the ASGI-capable version; the
+# staticfiles app ships a runserver override too, and whichever app is listed
+# later wins. Listed after staticfiles, `manage.py runserver` would quietly go
+# back to serving WSGI only and every WebSocket handshake would 404.
+ASGI_APPS = ["daphne"]
+
 DJANGO_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -47,18 +54,18 @@ DJANGO_APPS = [
 THIRD_PARTY_APPS = [
     "rest_framework",
     "corsheaders",  # the Vite dev server on :5173 is a cross-origin caller
-    # TODO Phase 6: "channels" (WebSocket alert feed)
+    "channels",     # WebSocket alert feed (alerts/consumers.py)
 ]
 
 LOCAL_APPS = [
     "common",       # envelope, exception handler, abstract base models
     "portfolio",    # Portfolio / Holding / Transaction
     "marketdata",   # PriceSnapshot / PriceHistory  (+ provider interface in Phase 2)
-    "alerts",       # AlertRule / AlertEvent        (+ scan task in Phase 6)
+    "alerts",       # AlertRule / AlertEvent + evaluator, consumer, scan cmd
     "risk",         # pure engine + risk services   (+ optimizer in Phase 5)
 ]
 
-INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+INSTALLED_APPS = ASGI_APPS + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -93,6 +100,9 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "config.wsgi.application"
+# Points at the ProtocolTypeRouter in config/asgi.py, not at a bare Django app:
+# this is what routes an incoming "websocket" scope to alerts/routing.py while
+# leaving "http" scopes with Django. Read by daphne and by runserver alike.
 ASGI_APPLICATION = "config.asgi.application"
 
 
@@ -226,11 +236,64 @@ DEFAULT_BASE_CURRENCY = "INR"
 TRADING_DAYS_PER_YEAR = 252
 RISK_FREE_RATE = 0.065  # annualised; ~India 10Y G-Sec. TODO Phase 3: make configurable.
 
-# TODO Phase 2/6: Celery + Redis
-# CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+# ---------------------------------------------------------------------------
+# Channels - the transport under the live alert feed.
+#
+# Redis rather than the in-memory layer, because the two halves of an alert run
+# in DIFFERENT PROCESSES: `manage.py scan_alerts` detects the breach, while the
+# browser's socket is held open by daphne. InMemoryChannelLayer is per-process,
+# so a group_send from the command would reach nobody. Redis is the shared bus
+# that lets one process fan out to sockets held by another.
+#
+# `capacity` is per channel: a browser tab that stops reading backs up here, and
+# once full the layer drops the oldest messages rather than blocking the scan.
+# `expiry` discards anything undelivered after a minute - a stale breach is
+# worse than a missing one on a dashboard that re-snapshots on reconnect.
+# ---------------------------------------------------------------------------
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+
+#: How long a redis-py socket may wait on a read before it gives up.
+#:
+#: This is NOT a tuning knob - it is a required fix for a version interaction
+#: between the two pinned libraries, and lowering it below 5 breaks the feed:
+#:
+#:   * channels_redis 4.3.0 parks an idle consumer on BZPOPMIN with
+#:     `brpop_timeout = 5`, so Redis holds the connection open for 5s at a time
+#:     whenever no message is waiting - which is the normal state of an alert
+#:     socket.
+#:   * redis-py 8.x introduced DEFAULT_SOCKET_TIMEOUT = 5. channels_redis was
+#:     written against older versions where the default was None (wait forever)
+#:     and so never sets it.
+#:
+#: Both timers are therefore 5 seconds and they race on every idle poll. The
+#: client usually wins, redis.exceptions.TimeoutError escapes into Channels'
+#: dispatch loop, and the consumer dies - the browser sees close code 1011 a few
+#: seconds after connecting, on a socket that is working perfectly.
+#:
+#: 30s is comfortably clear of the 5s blocking pop while still noticing a Redis
+#: that has genuinely stopped answering.
+REDIS_SOCKET_TIMEOUT = 30
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            # A dict entry (rather than a bare URL string) is passed straight
+            # through to redis.asyncio.ConnectionPool.from_url as kwargs, which
+            # is the only way to reach socket_timeout from here.
+            "hosts": [{"address": REDIS_URL, "socket_timeout": REDIS_SOCKET_TIMEOUT}],
+            "capacity": 500,
+            "expiry": 60,
+        },
+    }
+}
+
+# The test suite swaps this for channels.layers.InMemoryChannelLayer
+# (alerts/tests/conftest.py), so `pytest` never needs a running Redis.
+
+# TODO Phase 2/6: Celery + Redis. The broker can share the host above; give
+# Celery its own database number so a FLUSHDB on either never eats the other.
+# CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6379/1")
 # CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 # CELERY_TIMEZONE = TIME_ZONE
 # CELERY_BEAT_SCHEDULE = {...}   # poll_prices every 60s, scan_alerts every 60s
-
-# TODO Phase 6: Channels layer
-# CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer", ...}}

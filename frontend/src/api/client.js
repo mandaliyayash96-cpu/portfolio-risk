@@ -14,6 +14,18 @@ import axios from 'axios'
 // deployed build can point at the real host instead of a dev port.
 export const API_BASE_URL = 'http://127.0.0.1:8000'
 
+/**
+ * The WebSocket address for a path on the same backend.
+ *
+ * Derived from API_BASE_URL rather than written out again: the alert feed and
+ * the REST API are served by one daphne process, so a second hardcoded host is
+ * a second thing to forget when the port moves. http -> ws, https -> wss.
+ */
+export function websocketUrl(path) {
+  const base = API_BASE_URL.replace(/^http/, 'ws').replace(/\/$/, '')
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`
+}
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000, // the Monte Carlo leg of the report is not instant
@@ -44,22 +56,27 @@ function transportError(error) {
     )
   }
   return new ApiError(
-    `Cannot reach the API at ${API_BASE_URL}. Start it with \`python manage.py runserver\` in the backend folder, then retry.`,
+    `Cannot reach the API at ${API_BASE_URL}. Start it with \`daphne config.asgi:application\` in the backend folder, then retry.`,
     { code: 'network_error' },
   )
 }
 
 /**
- * GET one enveloped endpoint and hand back its `data`.
+ * Call one enveloped endpoint and hand back its `data`.
+ *
+ * Method-aware rather than GET-only because Phase 6 writes: creating an alert
+ * rule and acknowledging an event are POSTs through the same envelope, and the
+ * unwrapping and error translation below should not exist twice.
  *
  * @throws {ApiError} with the backend's message for a business failure
- *   (not_found / empty_portfolio / missing_price_data / insufficient_history /
- *   optimization_failed), or a fix-it message when the API was unreachable.
+ *   (not_found / invalid_input / empty_portfolio / missing_price_data /
+ *   insufficient_history / optimization_failed), or a fix-it message when the
+ *   API was unreachable.
  */
-async function getEnveloped(path) {
+async function request(method, path, body) {
   let response
   try {
-    response = await api.get(path)
+    response = await api.request({ method, url: path, data: body })
   } catch (error) {
     // A 4xx/5xx still carries a perfectly good envelope - prefer its message.
     const envelope = error.response?.data
@@ -84,6 +101,16 @@ async function getEnveloped(path) {
     })
   }
   return envelope.data
+}
+
+/** GET an enveloped endpoint. */
+export function getEnveloped(path) {
+  return request('get', path)
+}
+
+/** POST to an enveloped endpoint. Body defaults to {} - DRF wants valid JSON. */
+export function postEnveloped(path, body = {}) {
+  return request('post', path, body)
 }
 
 /** The full risk report for a portfolio. */

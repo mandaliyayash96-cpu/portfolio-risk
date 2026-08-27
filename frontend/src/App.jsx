@@ -7,11 +7,18 @@
  * "refreshing", so the page never blanks mid-sentence. A failed poll that
  * follows a successful one is shown as a banner above the still-valid numbers
  * rather than replacing them - stale data plus a warning beats an empty screen.
+ *
+ * <AlertsPanel> is deliberately wired with nothing but the portfolio id. It owns
+ * its own WebSocket, its own rules and its own errors, and shares no state with
+ * the report above it - so an alert feed that cannot connect, or a Redis that is
+ * down, degrades to one panel showing a grey dot rather than taking the risk
+ * dashboard with it. This component never awaits it and never reads from it.
  */
 
 import { useEffect, useState } from 'react'
 
 import { getRebalance, getRiskReport } from './api/client'
+import AlertsPanel from './components/AlertsPanel'
 import AllocationPie from './components/AllocationPie'
 import CorrelationHeatmap from './components/CorrelationHeatmap'
 import Header from './components/Header'
@@ -152,6 +159,8 @@ export default function App() {
 
       <RebalanceCard data={rebalance} error={rebalanceError} isLoading={isLoading} />
 
+      <AlertsPanel portfolioId={PORTFOLIO_ID} />
+
       <div className="grid grid--halves">
         <AllocationPie holdings={report.portfolio?.holdings} />
         <VarChart report={report} />
@@ -170,7 +179,9 @@ export default function App() {
           Prices from the last <code>manage.py fetch_prices</code> run · report recomputed on every
           request
         </span>
-        <span>Auto-refreshing every {POLL_INTERVAL_MS / 1000}s</span>
+        <span>
+          Auto-refreshing every {POLL_INTERVAL_MS / 1000}s · alerts stream live over WebSocket
+        </span>
       </footer>
     </main>
   )

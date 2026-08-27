@@ -13,11 +13,20 @@ pytest==9.1.1
 pytest-django==4.14.0
 
 # Phase 6 — async + realtime.
+# Channels serves the WebSocket alert feed; daphne is the ASGI server that
+# actually speaks it (and, listed first in INSTALLED_APPS, replaces runserver's
+# WSGI-only one). channels-redis is the cross-process group layer: without it a
+# scan running in `manage.py scan_alerts` could not reach a socket held open by
+# the daphne process.
+channels==4.3.2
+channels-redis==4.3.0
+daphne==4.2.3
+redis==8.1.0
+
+# Still deferred — tonight's scans are triggered by hand with
+# `manage.py scan_alerts`.
 # celery==5.*
-# redis==5.*
 # django-celery-beat==2.*
-# channels[daphne]==4.*
-# channels-redis==4.*
 
 # Phase 7 — React dev server talks to this API cross-origin.
 # django-cors-headers==4.*

@@ -806,3 +806,226 @@ code {
     gap: 20px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Alerts (Phase 6)
+
+   The feed is the one part of this dashboard that changes while you are looking
+   at it, so it gets the only status indicator on the page and the only red rail
+   that means "right now" rather than "this metric is high".
+   --------------------------------------------------------------------------- */
+.alerts .panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* -- connection status ----------------------------------------------------- */
+.alerts__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--surface-sunken);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.alerts__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+  flex: none;
+}
+
+.alerts__status--connected {
+  color: var(--good);
+  background: var(--good-wash);
+}
+
+.alerts__status--connected .alerts__dot {
+  background: var(--good);
+  /* Reuses the header's live pulse, so "live" means one thing on this page. */
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* Connecting and reconnecting share a look on purpose: from the user's side
+   they are the same state - not live yet, working on it. */
+.alerts__status--connecting .alerts__dot,
+.alerts__status--reconnecting .alerts__dot {
+  background: var(--ink-muted);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.alerts__status--failed {
+  color: var(--bad);
+  background: var(--bad-wash);
+}
+
+.alerts__status--failed .alerts__dot {
+  background: var(--bad);
+}
+
+/* -- the feed -------------------------------------------------------------- */
+.alerts__feed {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--bad-wash);
+  border: 1px solid var(--border-soft);
+  border-left: 4px solid var(--bad);
+  border-radius: 8px;
+}
+
+.alert__body {
+  min-width: 0;
+}
+
+.alert__message {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.alert__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.alert__metric {
+  font-weight: 600;
+}
+
+.alert__sep {
+  color: var(--ink-muted);
+}
+
+.button--small {
+  margin-top: 0;
+  padding: 7px 14px;
+  font-size: 13.5px;
+  flex: none;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* -- the rule form --------------------------------------------------------- */
+.rule-form {
+  padding: 14px 16px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.rule-form__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.rule-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1 1 190px;
+  min-width: 0;
+}
+
+.rule-form__field--narrow {
+  flex: 0 1 110px;
+}
+
+.rule-form__label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+}
+
+.rule-form select,
+.rule-form input {
+  width: 100%;
+  padding: 9px 10px;
+  font-size: 14.5px;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.rule-form select:focus-visible,
+.rule-form input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The unit sits inside the field rather than beside it, so the number and the
+   "%" that gives it meaning cannot be separated by a line wrap. */
+.rule-form__input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.rule-form__input-wrap input {
+  padding-right: 28px;
+}
+
+.rule-form__suffix {
+  position: absolute;
+  right: 10px;
+  font-size: 14px;
+  color: var(--ink-muted);
+  pointer-events: none;
+}
+
+.rule-form__hint {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.rule-form .banner {
+  margin-top: 10px;
+  margin-bottom: 0;
+}
+
+@media (max-width: 700px) {
+  .rule-form__field,
+  .rule-form__field--narrow {
+    flex: 1 1 100%;
+  }
+
+  .alert {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
