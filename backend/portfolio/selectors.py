@@ -72,6 +72,66 @@ def get_tickers(portfolio_id: int) -> list[str]:
     return list(seen)
 
 
+def get_holding(holding_id: int, portfolio_id: int | None = None) -> Holding:
+    """
+    One holding by id, optionally scoped to the portfolio that owns it.
+
+    `portfolio_id` is not decoration. The delete endpoint spells the portfolio
+    in its URL, and scoping the lookup to it means a guessed holding id cannot
+    reach into somebody else's portfolio - the same hole the TODO on
+    `get_portfolio` describes, closed for this one path today rather than left
+    for the auth phase.
+
+    Raises:
+        NotFoundError: no such holding, or it belongs to another portfolio.
+            Both render as the same 404 on purpose: telling the caller which of
+            the two it was is telling them an id exists.
+    """
+    filters = {"pk": holding_id}
+    if portfolio_id is not None:
+        filters["portfolio_id"] = portfolio_id
+    try:
+        return Holding.objects.select_related("portfolio").get(**filters)
+    except (Holding.DoesNotExist, ValueError, TypeError) as exc:
+        raise NotFoundError(f"Holding {holding_id} does not exist.") from exc
+
+
+def serialize_holding(holding: Holding) -> dict:
+    """
+    One holding as JSON.
+
+    Money and quantity are emitted as STRINGS (common/MONEY.md): they are
+    Decimals in the database and floating them through JSON to save four
+    characters is how 1234.5600 becomes 1234.5600000000001 in a browser.
+
+    `id` is the field the risk report's holdings block deliberately lacks - that
+    block describes a VALUATION, this one describes a ROW you can edit or
+    delete. The dashboard joins the two by ticker.
+    """
+    return {
+        "id": holding.pk,
+        "portfolio_id": holding.portfolio_id,
+        "ticker": holding.ticker,
+        "quantity": str(holding.quantity),
+        "avg_buy_price": str(holding.avg_buy_price),
+        "cost_basis": str(holding.cost_basis),
+        "buy_date": holding.buy_date.isoformat() if holding.buy_date else None,
+        "asset_type": holding.asset_type,
+        "sector": holding.sector,
+    }
+
+
+def list_holdings(portfolio_id: int) -> list[dict]:
+    """
+    Every position in one portfolio, serialised, ticker-ordered.
+
+    Unlike `get_holdings` this asserts the portfolio EXISTS first, so the
+    endpoint answers a bad id with a 404 rather than an empty list that reads
+    as "you own nothing".
+    """
+    get_portfolio(portfolio_id)
+    return [serialize_holding(holding) for holding in get_holdings(portfolio_id)]
+
 # TODO Phase 4 (remaining):
 #     list_portfolios(user) -> QuerySet[Portfolio]
 #     get_portfolio_valuation(portfolio_id) -> dict                  # joins latest PriceSnapshot

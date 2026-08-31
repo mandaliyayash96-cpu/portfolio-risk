@@ -32,6 +32,19 @@ const api = axios.create({
   headers: { Accept: 'application/json' },
 })
 
+/**
+ * The ceiling for the two calls that WRITE holdings.
+ *
+ * Adding a ticker the backend has never seen makes it fetch that symbol from
+ * yfinance before replying - up to two upstream calls at a 20s timeout each,
+ * and a CSV of new symbols multiplies that. Thirty seconds is right for a
+ * report that is only ever computed from stored data; it would abort a
+ * perfectly healthy import halfway through. The request keeps running on the
+ * server either way, so a timeout here is a lie about what happened, not a
+ * cancellation - hence the higher number rather than a nicer error.
+ */
+const WRITE_TIMEOUT_MS = 120_000
+
 /** An error we can show the user verbatim, with the backend's code attached. */
 export class ApiError extends Error {
   constructor(message, { code = 'error', details = null, status = null } = {}) {
@@ -73,10 +86,10 @@ function transportError(error) {
  *   insufficient_history / optimization_failed), or a fix-it message when the
  *   API was unreachable.
  */
-async function request(method, path, body) {
+async function request(method, path, body, config = {}) {
   let response
   try {
-    response = await api.request({ method, url: path, data: body })
+    response = await api.request({ method, url: path, data: body, ...config })
   } catch (error) {
     // A 4xx/5xx still carries a perfectly good envelope - prefer its message.
     const envelope = error.response?.data
@@ -109,8 +122,13 @@ export function getEnveloped(path) {
 }
 
 /** POST to an enveloped endpoint. Body defaults to {} - DRF wants valid JSON. */
-export function postEnveloped(path, body = {}) {
-  return request('post', path, body)
+export function postEnveloped(path, body = {}, config) {
+  return request('post', path, body, config)
+}
+
+/** DELETE an enveloped endpoint. */
+export function deleteEnveloped(path, config) {
+  return request('delete', path, undefined, config)
 }
 
 /** The full risk report for a portfolio. */
@@ -140,3 +158,80 @@ export function getRebalance(portfolioId) {
 export function getPerformance(portfolioId) {
   return getEnveloped(`/api/performance/${portfolioId}/`)
 }
+
+/* ---------------------------------------------------------------------------
+   Holdings entry
+   ---------------------------------------------------------------------------
+   The write half of the API, and the only calls on this page that can change
+   what the risk report says. All three are slower than they look: adding a
+   ticker the backend has no prices for makes it fetch that symbol from
+   yfinance before it answers, which is why they carry WRITE_TIMEOUT_MS and why
+   the UI shows a "fetching prices" state rather than a plain spinner.
+   --------------------------------------------------------------------------- */
+
+/** The rows behind the Holdings table, each with the `id` a delete needs. */
+export function listHoldings(portfolioId) {
+  return getEnveloped(`/api/portfolio/${portfolioId}/holdings/`)
+}
+
+/**
+ * Add one position, or replace the one already held in that ticker.
+ *
+ * `body` is {ticker, quantity, avg_buy_price} plus optional
+ * {buy_date, asset_type, sector}. Numbers are sent as the STRINGS the user
+ * typed: the backend stores them as exact Decimals, and routing them through
+ * JavaScript's Number on the way would put a float in the middle of a value
+ * that is about to be stored to four decimal places.
+ *
+ * Resolves with the saved holding plus `created` (false means it replaced one)
+ * and `warning` - non-null when the row saved but its prices could not be
+ * fetched, which is what a typo'd symbol looks like.
+ *
+ * @throws {ApiError} code `invalid_input` with a message naming the bad field.
+ */
+export function addHolding(portfolioId, body) {
+  return postEnveloped(`/api/portfolio/${portfolioId}/holdings/`, body, {
+    timeout: WRITE_TIMEOUT_MS,
+  })
+}
+
+/**
+ * Bulk-load holdings from a CSV file.
+ *
+ * Resolves with a REPORT, not a yes/no: {total_rows, added, updated, skipped,
+ * results[], price_fetch}. A file where some rows failed still resolves - those
+ * rows come back as `skipped` with a reason, and the caller is expected to show
+ * them. Only a file no row survives (wrong headers, too big, not a CSV) rejects.
+ *
+ * The Content-Type header is left unset deliberately: the browser has to write
+ * it itself so it can append the multipart boundary, and setting it by hand is
+ * the classic way to get an upload the server cannot parse.
+ */
+export function importHoldingsCsv(portfolioId, file) {
+  const form = new FormData()
+  form.append('file', file)
+  return postEnveloped(`/api/portfolio/${portfolioId}/holdings/import/`, form, {
+    timeout: WRITE_TIMEOUT_MS,
+  })
+}
+
+/** Remove one position. Scoped to the portfolio, so a stale id 404s. */
+export function deleteHolding(portfolioId, holdingId) {
+  return deleteEnveloped(`/api/portfolio/${portfolioId}/holdings/${holdingId}/`)
+}
+
+/**
+ * The columns a CSV must have, and one filled-in example row.
+ *
+ * Kept beside the calls above rather than inside the component because it is a
+ * fact about the API's contract, not about the form's layout - if the backend's
+ * REQUIRED_COLUMNS ever change, this is the line that has to change with them.
+ */
+export const CSV_REQUIRED_COLUMNS = ['ticker', 'quantity', 'avg_buy_price']
+export const CSV_OPTIONAL_COLUMNS = ['buy_date', 'asset_type', 'sector']
+export const CSV_TEMPLATE = [
+  [...CSV_REQUIRED_COLUMNS, ...CSV_OPTIONAL_COLUMNS].join(','),
+  'RELIANCE.NS,10,1400.50,2026-01-05,EQUITY,Energy',
+  'TCS.NS,5,3200.00,2026-01-06,EQUITY,IT',
+  '',
+].join('\n')

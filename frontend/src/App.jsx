@@ -8,6 +8,14 @@
  * follows a successful one is shown as a banner above the still-valid numbers
  * rather than replacing them - stale data plus a warning beats an empty screen.
  *
+ * <ManageHoldings> is the one child that can change what the report says, so
+ * it is wired the other way round from the rest: it reports upward, through a
+ * single `onChanged` callback that bumps `attempt` and re-runs the load below.
+ * That is the whole integration - after an add, an import or a delete, risk,
+ * rebalance, performance and the holdings list are all re-fetched on one tick,
+ * so no panel is ever describing a portfolio that no longer exists. Its own
+ * failures stay inside it; a rejected CSV cannot touch the numbers on screen.
+ *
  * <AlertsPanel> is deliberately wired with nothing but the portfolio id. It owns
  * its own WebSocket, its own rules and its own errors, and shares no state with
  * the report above it - so an alert feed that cannot connect, or a Redis that is
@@ -15,14 +23,21 @@
  * dashboard with it. This component never awaits it and never reads from it.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { getPerformance, getRebalance, getRiskReport } from './api/client'
+import {
+  deleteHolding,
+  getPerformance,
+  getRebalance,
+  getRiskReport,
+  listHoldings,
+} from './api/client'
 import AlertsPanel from './components/AlertsPanel'
 import AllocationPie from './components/AllocationPie'
 import CorrelationHeatmap from './components/CorrelationHeatmap'
 import Header from './components/Header'
 import HoldingsTable from './components/HoldingsTable'
+import ManageHoldings from './components/ManageHoldings'
 import PerformancePanel from './components/PerformancePanel'
 import RebalanceCard from './components/RebalanceCard'
 import RiskCards from './components/RiskCards'
@@ -49,6 +64,10 @@ export default function App() {
   // value chart leads the page, but it must not be able to take the page down.
   const [performance, setPerformance] = useState(null)
   const [performanceError, setPerformanceError] = useState(null)
+  // The holdings ROWS, as opposed to the report's valuation of them. Fetched
+  // only for their ids, which the delete button needs and the report has no
+  // business carrying. A failure here costs the delete buttons and nothing else.
+  const [holdings, setHoldings] = useState([])
   // Bumped by Retry to re-run the effect below - the one honest way to say
   // "do that again" to an effect.
   const [attempt, setAttempt] = useState(0)
@@ -63,11 +82,13 @@ export default function App() {
       // allSettled, not all: one endpoint failing must not discard the other's
       // result. Both are fetched on the same tick so the two panels always
       // describe the same moment.
-      const [riskOutcome, rebalanceOutcome, performanceOutcome] = await Promise.allSettled([
-        getRiskReport(PORTFOLIO_ID),
-        getRebalance(PORTFOLIO_ID),
-        getPerformance(PORTFOLIO_ID),
-      ])
+      const [riskOutcome, rebalanceOutcome, performanceOutcome, holdingsOutcome] =
+        await Promise.allSettled([
+          getRiskReport(PORTFOLIO_ID),
+          getRebalance(PORTFOLIO_ID),
+          getPerformance(PORTFOLIO_ID),
+          listHoldings(PORTFOLIO_ID),
+        ])
       if (ignore) return
 
       if (riskOutcome.status === 'fulfilled') {
@@ -76,6 +97,20 @@ export default function App() {
         setLastUpdated(new Date())
       } else {
         setError(riskOutcome.reason)
+        // "Keep the last good report" is the right policy for a TRANSIENT
+        // failure - a timeout, a dropped connection - where the numbers on
+        // screen are still the best available answer. `empty_portfolio` is not
+        // that. It is the backend stating that the portfolio now holds nothing,
+        // which after a delete is the user's own doing, and leaving the old
+        // table up would show them a position they just removed. So this one
+        // failure clears the report and falls through to the error page - which
+        // carries the add form, so the fix is right there.
+        if (riskOutcome.reason?.code === 'empty_portfolio') {
+          setReport(null)
+          setRebalance(null)
+          setPerformance(null)
+          setHoldings([])
+        }
       }
 
       if (rebalanceOutcome.status === 'fulfilled') {
@@ -90,6 +125,12 @@ export default function App() {
         setPerformanceError(null)
       } else {
         setPerformanceError(performanceOutcome.reason)
+      }
+
+      // No error state for this one on purpose. It contributes ids, not
+      // information - the last good list stays, and the buttons keep working.
+      if (holdingsOutcome.status === 'fulfilled') {
+        setHoldings(holdingsOutcome.value)
       }
 
       setIsLoading(false)
@@ -119,6 +160,38 @@ export default function App() {
     setAttempt((count) => count + 1)
   }
 
+  /**
+   * Re-read everything, without blanking anything.
+   *
+   * Deliberately NOT `retry`: this runs after a write the user just made, when
+   * there is already a good report on screen. Setting isLoading would swap the
+   * whole page for a skeleton and lose the import report they are still reading.
+   * Bumping `attempt` re-runs the same effect and the panels update in place.
+   */
+  const refreshAll = useCallback(() => {
+    setIsRefreshing(true)
+    setAttempt((count) => count + 1)
+  }, [])
+
+  /**
+   * ticker -> holding id, for the delete button in the table below.
+   *
+   * A map rather than a lookup per row: the table joins on every render, and
+   * one pass here beats a find() per position.
+   */
+  const holdingIds = useMemo(
+    () => Object.fromEntries(holdings.map((holding) => [holding.ticker, holding.id])),
+    [holdings],
+  )
+
+  const removeHolding = useCallback(
+    async (holdingId) => {
+      await deleteHolding(PORTFOLIO_ID, holdingId)
+      refreshAll()
+    },
+    [refreshAll],
+  )
+
   // First load, nothing to show yet.
   if (isLoading && !report) {
     return (
@@ -133,6 +206,15 @@ export default function App() {
   }
 
   // Failed before we ever had data: the error IS the page.
+  //
+  // With one exception, and it is the reason <ManageHoldings> is mounted here
+  // too. An EMPTY portfolio is a first-class failure of the risk report - there
+  // is nothing to measure - and it is also the exact state a new user starts
+  // in. Showing them only "this portfolio has no holdings" with a Retry button
+  // would be a dead end: the fix for that error is to add a holding, so the
+  // form that adds one has to be reachable from the error page. The same is
+  // true of `missing_price_data`, where the fix is often to delete the ticker
+  // that has no prices.
   if (error && !report) {
     return (
       <main className="page page--centered">
@@ -148,6 +230,10 @@ export default function App() {
           <button type="button" className="button" onClick={retry}>
             Retry
           </button>
+        </div>
+
+        <div className="page__recovery">
+          <ManageHoldings portfolioId={PORTFOLIO_ID} onChanged={retry} />
         </div>
       </main>
     )
@@ -175,6 +261,8 @@ export default function App() {
 
       <RebalanceCard data={rebalance} error={rebalanceError} isLoading={isLoading} />
 
+      <ManageHoldings portfolioId={PORTFOLIO_ID} onChanged={refreshAll} />
+
       <AlertsPanel portfolioId={PORTFOLIO_ID} />
 
       <div className="grid grid--halves">
@@ -186,6 +274,8 @@ export default function App() {
         <HoldingsTable
           holdings={report.portfolio?.holdings}
           marketValue={report.portfolio?.market_value}
+          holdingIds={holdingIds}
+          onDelete={removeHolding}
         />
         <CorrelationHeatmap matrix={report.correlation_matrix} />
       </div>
