@@ -2,12 +2,14 @@
 Django settings for the Investor Portfolio Monitoring & Risk Management System.
 
 Phase 1: project config only. SQLite, DRF wired to the standard JSON envelope.
-Celery / Redis / Channels / PostgreSQL seams are marked with TODO and stay inert.
+Phase 6 activated the Channels/Redis seam and Phase 8 the Celery one - both are
+live below. PostgreSQL is still a TODO.
 
 Generated with Django 6.1.
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 # backend/  (manage.py lives here)
@@ -291,9 +293,128 @@ CHANNEL_LAYERS = {
 # The test suite swaps this for channels.layers.InMemoryChannelLayer
 # (alerts/tests/conftest.py), so `pytest` never needs a running Redis.
 
-# TODO Phase 2/6: Celery + Redis. The broker can share the host above; give
-# Celery its own database number so a FLUSHDB on either never eats the other.
-# CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6379/1")
-# CELERY_RESULT_BACKEND = CELERY_BROKER_URL
-# CELERY_TIMEZONE = TIME_ZONE
-# CELERY_BEAT_SCHEDULE = {...}   # poll_prices every 60s, scan_alerts every 60s
+# ---------------------------------------------------------------------------
+# Celery - the scheduler that keeps prices fresh without anyone typing a command.
+#
+# Every option here is read by config/celery.py through the CELERY_ namespace,
+# so `CELERY_BROKER_URL` below IS Celery's `broker_url`.
+#
+# DATABASE 1, NOT 0
+# -----------------
+# The broker shares the Redis SERVER with the Channels layer above but not its
+# keyspace. `celery purge`, a stuck queue drained by hand, a stray FLUSHDB -
+# all routine, and none of them should be capable of dropping the alert feed's
+# groups. Same reasoning the Channels block gives for its own settings: the two
+# systems fail independently or they are not two systems.
+# ---------------------------------------------------------------------------
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6379/1")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = True
+
+#: Results are diagnostics, not data. A task lands every 60s and the useful
+#: question is only ever "what did the last few do", so they expire in an hour
+#: rather than Celery's default day.
+CELERY_RESULT_EXPIRES = 3600
+CELERY_TASK_TRACK_STARTED = True
+
+#: Redis is on the same machine, but a worker started before it is up should
+#: wait rather than exit - beat and the worker are launched by hand in RUN.md
+#: and the order is easy to get wrong.
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+# ---------------------------------------------------------------------------
+# WINDOWS: THE WORKER POOL
+#
+# Celery's default `prefork` pool DOES NOT WORK ON WINDOWS. It depends on
+# fork(), which Windows has no equivalent of. The failure is silent and
+# expensive to diagnose: the worker boots, prints its banner, lists the
+# registered tasks, connects to Redis - and then consumes nothing at all. It
+# looks exactly like a broker problem, and it is not.
+#
+# So the pool defaults to `solo` on Windows (os.name == "nt") and stays
+# `prefork` everywhere else, which keeps a Linux deployment on real
+# concurrency. RUN.md ALSO passes --pool=solo explicitly, because a command
+# line that works when copied into a fresh shell is worth more than a default
+# somebody has to know about; the flag and this setting agree.
+#
+# The cost of solo is real and worth knowing: ONE execution thread, so
+# refresh_all_prices and scan_all_alerts never overlap - they queue. That suits
+# this pipeline (the scan wants the prices the refresh just wrote) but it means
+# a slow yfinance poll delays the scan behind it, which is what `expires` in
+# the beat schedule below exists to bound.
+# ---------------------------------------------------------------------------
+CELERY_WORKER_POOL = os.environ.get(
+    "CELERY_WORKER_POOL", "solo" if os.name == "nt" else "prefork"
+)
+
+#: Acknowledge on receipt, not on completion: a queued poll that was
+#: interrupted mid-run is worthless - the next tick is 60 seconds away and
+#: carries fresher data than the retry would.
+CELERY_TASK_ACKS_LATE = False
+
+#: Time limits are enforced by the PREFORK pool's signals, so on Windows under
+#: --pool=solo they are inert - a hung yfinance call cannot be interrupted
+#: here. They are set for a Linux deployment, where they matter. On Windows the
+#: real protection is `expires` in the schedule below plus the provider's own
+#: 20s per-request timeout (marketdata/providers.py).
+CELERY_TASK_SOFT_TIME_LIMIT = 240
+CELERY_TASK_TIME_LIMIT = 300
+
+# ---------------------------------------------------------------------------
+# Beat schedule
+#
+# Two jobs, in this order and for this reason: refresh writes prices, scan
+# measures them. A scan that runs on the same tick as the refresh would be
+# measuring the PREVIOUS minute's prices, so it is published with a countdown -
+# beat sends the message on its own 60s tick and the worker holds it for
+# ALERT_SCAN_OFFSET_SECONDS before executing. That is a genuine phase offset
+# rather than a hope that one task finishes before the other starts.
+#
+# `expires` on both entries is the anti-pile-up. If the worker cannot reach a
+# message within its interval - a yfinance stall, a solo pool busy with the
+# previous poll - the message is DISCARDED rather than run late behind a
+# backlog. Running a stale poll three minutes after it was scheduled has no
+# value when a fresh one is already queued behind it.
+# ---------------------------------------------------------------------------
+#: How often prices are refreshed.
+PRICE_REFRESH_SECONDS = int(os.environ.get("PRICE_REFRESH_SECONDS", "60"))
+ALERT_SCAN_SECONDS = int(os.environ.get("ALERT_SCAN_SECONDS", "60"))
+
+#: How long after the refresh the scan runs. Long enough that the common case
+#: (a handful of tickers, all reachable) has finished writing.
+ALERT_SCAN_OFFSET_SECONDS = int(os.environ.get("ALERT_SCAN_OFFSET_SECONDS", "10"))
+
+
+def _expires_after(interval_seconds: int) -> int:
+    """
+    Drop a message that is nearly as old as the gap between messages.
+
+    Five seconds of slack so a poll that starts a moment late still runs; below
+    a floor of 5s the whole schedule is being run at a cadence this project
+    does not support anyway.
+    """
+    return max(interval_seconds - 5, 5)
+
+
+CELERY_BEAT_SCHEDULE = {
+    "refresh-all-prices": {
+        "task": "marketdata.refresh_all_prices",
+        "schedule": timedelta(seconds=PRICE_REFRESH_SECONDS),
+        "options": {"expires": _expires_after(PRICE_REFRESH_SECONDS)},
+    },
+    "scan-all-alerts": {
+        "task": "alerts.scan_all_alerts",
+        "schedule": timedelta(seconds=ALERT_SCAN_SECONDS),
+        "options": {
+            # The offset. See the block comment above.
+            "countdown": ALERT_SCAN_OFFSET_SECONDS,
+            "expires": _expires_after(ALERT_SCAN_SECONDS),
+        },
+    },
+}
+
+# TODO Phase-later: django-celery-beat, once schedules need to be editable at
+# runtime instead of at deploy time. The static dict above is the right shape
+# while there are two jobs and both are infrastructure.

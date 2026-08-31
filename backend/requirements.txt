@@ -23,9 +23,18 @@ channels-redis==4.3.0
 daphne==4.2.3
 redis==8.1.0
 
-# Still deferred — tonight's scans are triggered by hand with
-# `manage.py scan_alerts`.
-# celery==5.*
+# Phase 8 — scheduled work.
+# Celery runs the price refresh and the alert scan on a timer, so the dashboard
+# stays current with nobody typing a command. The broker and result backend are
+# Redis DB 1 (Channels holds DB 0) — see config/settings.py.
+#
+# WINDOWS: the worker must run with --pool=solo. Celery's default prefork pool
+# needs fork() and silently consumes nothing on Windows. See RUN.md.
+celery==5.6.3
+
+# Still deferred — the beat schedule is static in settings.py, which is the
+# right shape while there are two jobs and both are infrastructure. This is
+# what to add when schedules need editing at runtime instead of at deploy time.
 # django-celery-beat==2.*
 
 # Phase 7 — React dev server talks to this API cross-origin.

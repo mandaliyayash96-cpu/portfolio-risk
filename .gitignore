@@ -4,3 +4,7 @@ __pycache__/
 db.sqlite3
 .env
 node_modules/
+
+# Celery Beat writes its last-run state here (backend/celerybeat-schedule*).
+celerybeat-schedule*
+celerybeat.pid
