@@ -12,13 +12,37 @@
  * together in this one table so they are easy to argue with and easy to change,
  * and so nobody mistakes a red card for an engine output.
  *
- * Tone vocabulary: 'good' (green), 'warn' (amber), 'bad' (red), 'flat' (ink).
+ * Tone vocabulary: 'good' (teal), 'warn' (amber), 'bad' (red), 'flat' (ink).
+ *
+ * ---------------------------------------------------------------------------
+ * Why the colour is never alone
+ * ---------------------------------------------------------------------------
+ * The tone shows up three times on a card - the rail down its edge, the dot
+ * beside the label, and the figure itself - and all three are redundant with
+ * the number, which is printed either way. The dot also carries a WORD, hidden
+ * visually but read aloud, so the verdict survives both greyscale and a screen
+ * reader. A card that says nothing without its colour is a card that says
+ * nothing to a colour-blind judge in the third row.
  */
 
 import { decimal, isMissing, percent } from '../format'
 
 /** Pick the first band whose test passes; bands are ordered worst-first. */
 const band = (value, bands) => bands.find(([test]) => test(value))?.[1] ?? 'flat'
+
+/**
+ * What each tone MEANS, in one word, for the people who cannot see it.
+ *
+ * Deliberately vague-but-directional. These sit across eight different metrics
+ * where "good" means a low number on some and a high number on others, so the
+ * word has to describe the verdict rather than the value.
+ */
+const TONE_LABELS = {
+  good: 'Healthy',
+  warn: 'Worth watching',
+  bad: 'Elevated risk',
+  flat: 'Not available',
+}
 
 const METRICS = [
   {
@@ -132,7 +156,12 @@ function MetricCard({ metric, report }) {
 
   return (
     <article className={`card card--${tone}`}>
-      <h3 className="card__label">{metric.label}</h3>
+      <div className="card__top">
+        <h3 className="card__label">{metric.label}</h3>
+        <span className="card__tone">
+          <span className="visually-hidden">{TONE_LABELS[tone]}</span>
+        </span>
+      </div>
       <p className="card__value">{metric.format(value)}</p>
       <p className="card__explain">{metric.explain}</p>
       {footnote && <p className="card__footnote">{footnote}</p>}

@@ -41,6 +41,7 @@ import {
 
 import { useChartColors } from '../theme-context'
 import { decimal, percent } from '../format'
+import { PanelSkeleton } from './Skeleton'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -177,12 +178,11 @@ function Shell({ children, subtitle }) {
 export default function PerformancePanel({ data, error, isLoading }) {
   const colors = useChartColors()
 
+  // A chart-shaped skeleton rather than a spinner: this panel leads its tab, so
+  // what is missing is a big rectangle and the placeholder may as well say so.
   if (isLoading && !data) {
     return (
-      <Shell>
-        <span className="spinner" aria-hidden="true" />
-        <p>Building the value curve…</p>
-      </Shell>
+      <PanelSkeleton title="Performance" subtitle="Building the value curve…" />
     )
   }
 

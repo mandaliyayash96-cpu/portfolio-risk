@@ -4,7 +4,25 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Portfolio Risk Dashboard</title>
+    <title>Portfolio Risk</title>
+    <!--
+      Inter, with a system stack behind it.
+
+      preconnect to BOTH hosts: googleapis serves the CSS, gstatic serves the
+      font files, and the second connection is the one that actually costs time
+      on a cold load. `display=swap` means a demo on a bad network paints in the
+      fallback immediately rather than showing nothing - and the fallback stack
+      below is chosen to be metrically close enough that the swap is not a jump.
+
+      If the CDN is unreachable the whole thing degrades to Segoe UI / system-ui
+      with no layout change, which is the state the dashboard shipped in before.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <!--
       Stamp the theme BEFORE the first paint.
 

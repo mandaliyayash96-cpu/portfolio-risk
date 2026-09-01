@@ -15,9 +15,14 @@ import { useTheme } from '../theme-context'
 import { decimal, isMissing } from '../format'
 
 /* The two candidate text colours for a coloured cell. Every cell gets whichever
-   of these contrasts better against it - see `pickInk`. */
-const DARK_INK = '#0f172a'
-const LIGHT_INK = '#f8fafc'
+   of these contrasts better against it - see `pickInk`.
+
+   They mirror --ink (light) and --page (light) from index.css, but they are NOT
+   theme-dependent and must not become so: a cell's background is an hsl() the
+   component computed itself, so the readable ink is a property of that cell,
+   not of the page it sits on. */
+const DARK_INK = '#0f1d18'
+const LIGHT_INK = '#f5f9f7'
 
 /** One sRGB channel, 0-255 -> its linear-light value (WCAG 2.1). */
 function linearise(channel) {
@@ -92,7 +97,7 @@ function pickInk(hue, saturation, lightness) {
  *
  * The light ramp runs 63-96%: pale cells. Reused as-is in dark mode that
  * becomes the single brightest object on the page - a glowing white grid on a
- * near-black dashboard. The dark ramp inverts it to 18-42%, so "weak
+ * near-black dashboard. The dark ramp inverts it to 10-28%, so "weak
  * correlation" reads as "melts into the background" in both, which is the
  * property that actually matters when you scan the matrix.
  *
@@ -107,7 +112,7 @@ function cellStyle(value, ramp) {
   const hue = clamped >= 0 ? 155 - clamped * 153 : 155
   const saturation = 20 + strength * 55
   // Light: 96 - strength*33 (falls as it saturates).
-  // Dark:  18 + strength*24 (rises). The direction follows from `base`.
+  // Dark:  10 + strength*18 (rises). The direction follows from `base`.
   const lightness =
     ramp.base > 50 ? ramp.base - strength * ramp.span : ramp.base + strength * ramp.span
 

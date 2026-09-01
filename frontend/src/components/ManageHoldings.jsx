@@ -3,10 +3,24 @@
  *
  * Self-contained in the same way <AlertsPanel> is. It owns its two forms, its
  * busy states and its errors, and the only thing it hands upward is a single
- * `onChanged()` call after a write actually landed - which is App's cue to
- * re-fetch risk, rebalance and performance. If everything in here fails, the
- * dashboard above it is untouched: this panel shows the error and the numbers
- * stay on screen.
+ * `onChanged()` call after a write actually landed - which is the dashboard's
+ * cue to re-fetch risk, rebalance and performance. If everything in here fails,
+ * the dashboard above it is untouched: this panel shows the error and the
+ * numbers stay on screen.
+ *
+ * NOTHING HERE IS LOCKED
+ * ----------------------
+ * This panel used to open with a paywall: a ₹9 button, and two forms nobody
+ * could see until it was pressed. It no longer has one. Both forms are always
+ * visible and always usable, and payment is asked for at SUBMIT - and only if
+ * the server refuses the write with a 402.
+ *
+ * The mechanism is `gatedWrite`, and the reason both forms can use it without
+ * knowing anything about payments is that it resolves with the write's real
+ * result whichever path it took. A submit that needed ₹9 and a submit that did
+ * not look identical from in here: one `await`, one result, one success banner.
+ * The only payment-aware line in either form is the `payment_cancelled` check,
+ * which exists so that changing your mind is not reported as an error.
  *
  * WHY THE BUSY STATE HAS TWO WORDS FOR IT
  * ---------------------------------------
@@ -24,19 +38,6 @@
  * back two reasons. Rendering only a count would throw away the half of that
  * answer the user has to act on, so the per-row table is the primary result
  * here and the counts are the summary above it.
- *
- * EDITING COSTS ₹9, AND THE OPEN/CLOSE TOGGLE IS THE ROUND
- * --------------------------------------------------------
- * This panel had an Open/Close button before payments existed, and that button
- * turned out to BE the editing round - so the two were merged rather than
- * stacked. Open is now "pay ₹9 and start editing"; Close is "I am done", which
- * ends the round server-side and means the next one costs another ₹9. There is
- * no third state where the panel is open but unpaid.
- *
- * The lock is a SCREEN, not a permission. Every write endpoint refuses an
- * unpaid request with a 402 whatever this component renders - see
- * payments/gating.py. What the locked state buys is a user who is told the
- * price before they fill in a form, rather than after.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -49,7 +50,8 @@ import {
   importHoldingsCsv,
 } from '../api/client'
 import { UNLOCK_PRICE_LABEL } from '../api/payments'
-import { useUnlock } from '../payments/unlock-context'
+import { PAYMENT_CANCELLED, useUnlock } from '../payments/unlock-context'
+import { moneyPrecise } from '../format'
 
 /** How long a write may take before the label admits it is fetching prices. */
 const SLOW_WRITE_MS = 600
@@ -64,6 +66,10 @@ const ASSET_TYPES = [
   { value: 'CRYPTO', label: 'Crypto' },
   { value: 'OTHER', label: 'Other' },
 ]
+
+const ASSET_TYPE_LABELS = Object.fromEntries(
+  ASSET_TYPES.map((entry) => [entry.value, entry.label]),
+)
 
 const EMPTY_FORM = {
   ticker: '',
@@ -80,12 +86,17 @@ const STATUS_CLASS = {
   skipped: 'pill pill--bad',
 }
 
+/** True when the user closed the payment sheet rather than the write failing. */
+const isCancellation = (error) => error?.code === PAYMENT_CANCELLED
+
 /**
  * The same three rules the backend enforces, checked before the round trip.
  *
  * This is a courtesy, not the validation - `portfolio.services` re-checks every
  * one of these and is the only opinion that counts. Doing it here too just
- * means a blank ticker costs a keystroke instead of a network call.
+ * means a blank ticker costs a keystroke instead of a network call - and, now
+ * that a submit can open a payment sheet, it means a form that was never going
+ * to save cannot get as far as asking for money.
  */
 function validate(form) {
   const errors = {}
@@ -135,12 +146,22 @@ function useSlowWrite(run, delay = SLOW_WRITE_MS) {
   return run !== null && slowRun === run
 }
 
-/** A spinner and a line of text, used by both forms while a write is in flight. */
-function BusyNote({ isSlow, idleLabel }) {
+/**
+ * A spinner and a line of text, used by both forms while a write is in flight.
+ *
+ * `isWaitingForPayment` outranks the slow-write label, because once the modal
+ * is up "fetching prices" is not what is happening - the request has already
+ * come back, refused, and is parked waiting for the user.
+ */
+function BusyNote({ isSlow, isWaitingForPayment, idleLabel }) {
+  let label = idleLabel
+  if (isWaitingForPayment) label = 'Waiting for payment…'
+  else if (isSlow) label = 'Fetching prices from the market feed…'
+
   return (
     <span className="manage__busy">
       <span className="spinner spinner--inline" aria-hidden="true" />
-      <span>{isSlow ? 'Fetching prices from the market feed…' : idleLabel}</span>
+      <span>{label}</span>
     </span>
   )
 }
@@ -149,6 +170,7 @@ function BusyNote({ isSlow, idleLabel }) {
    Manual entry
    --------------------------------------------------------------------------- */
 function ManualForm({ portfolioId, onChanged }) {
+  const { gatedWrite, pending } = useUnlock()
   const [form, setForm] = useState(EMPTY_FORM)
   const [fieldErrors, setFieldErrors] = useState({})
   const [error, setError] = useState(null)
@@ -172,25 +194,39 @@ function ManualForm({ portfolioId, onChanged }) {
     setFieldErrors(errors)
     if (Object.keys(errors).length > 0) return
 
+    const ticker = form.ticker.trim().toUpperCase()
+    const quantity = form.quantity.trim()
+    const price = form.avg_buy_price.trim()
+
     setSavingRun(Date.now())
     setError(null)
     setResult(null)
     try {
       // Values go as the typed strings - see addHolding's note on why they are
       // not passed through Number() first.
-      const saved = await addHolding(portfolioId, {
-        ticker: form.ticker.trim(),
-        quantity: form.quantity.trim(),
-        avg_buy_price: form.avg_buy_price.trim(),
-        buy_date: form.buy_date || null,
-        asset_type: form.asset_type,
-        sector: form.sector.trim(),
-      })
+      const saved = await gatedWrite(
+        {
+          action: `Add ${ticker} ×${quantity}`,
+          detail: `${ASSET_TYPE_LABELS[form.asset_type] ?? form.asset_type} · average buy price ${moneyPrecise(price)}`,
+          noun: 'holding',
+        },
+        () =>
+          addHolding(portfolioId, {
+            ticker,
+            quantity,
+            avg_buy_price: price,
+            buy_date: form.buy_date || null,
+            asset_type: form.asset_type,
+            sector: form.sector.trim(),
+          }),
+      )
       setResult(saved)
       setForm({ ...EMPTY_FORM, asset_type: form.asset_type })
       onChanged()
     } catch (apiError) {
-      setError(apiError)
+      // A cancelled payment is not a failure to apologise for, and the form is
+      // still full of what they typed. Say nothing and leave it alone.
+      if (!isCancellation(apiError)) setError(apiError)
     } finally {
       setSavingRun(null)
     }
@@ -279,7 +315,13 @@ function ManualForm({ portfolioId, onChanged }) {
         <button type="submit" className="button button--small" disabled={isSaving}>
           {isSaving ? 'Adding…' : 'Add holding'}
         </button>
-        {isSaving && <BusyNote isSlow={isSlow} idleLabel="Saving…" />}
+        {isSaving && (
+          <BusyNote
+            isSlow={isSlow}
+            isWaitingForPayment={pending !== null}
+            idleLabel="Saving…"
+          />
+        )}
       </div>
 
       {error && (
@@ -307,8 +349,34 @@ function ManualForm({ portfolioId, onChanged }) {
 /* ---------------------------------------------------------------------------
    CSV import
    --------------------------------------------------------------------------- */
+
+/**
+ * How many data rows a picked CSV appears to hold.
+ *
+ * Read in the browser purely so the payment modal can say "Import 5 holdings"
+ * instead of "Import a file" - a summary of something you cannot see is not a
+ * summary. It is a COUNT, not a parse: the backend does the real reading, and
+ * a file this miscounts still imports exactly the same rows.
+ *
+ * Returns null when the file cannot be read, and every caller treats that as
+ * "say nothing about the count" rather than as an error - failing to preview a
+ * number must never stop an import.
+ */
+async function countCsvRows(file) {
+  try {
+    const text = await file.text()
+    const lines = text.split(/\r?\n/).filter((line) => line.trim() !== '')
+    // Minus the header. A file of nothing but a header counts as zero, not -1.
+    return Math.max(lines.length - 1, 0)
+  } catch {
+    return null
+  }
+}
+
 function ImportForm({ portfolioId, onChanged }) {
+  const { gatedWrite, pending } = useUnlock()
   const [file, setFile] = useState(null)
+  const [rowCount, setRowCount] = useState(null)
   const [error, setError] = useState(null)
   const [report, setReport] = useState(null)
   const [importingRun, setImportingRun] = useState(null)
@@ -329,6 +397,14 @@ function ImportForm({ portfolioId, onChanged }) {
   )
   useEffect(() => () => URL.revokeObjectURL(templateUrl), [templateUrl])
 
+  async function pickFile(event) {
+    const picked = event.target.files?.[0] ?? null
+    setFile(picked)
+    setRowCount(null)
+    setError(null)
+    if (picked) setRowCount(await countCsvRows(picked))
+  }
+
   async function submit(event) {
     event.preventDefault()
     if (isImporting || !file) return
@@ -337,15 +413,27 @@ function ImportForm({ portfolioId, onChanged }) {
     setError(null)
     setReport(null)
     try {
-      const summary = await importHoldingsCsv(portfolioId, file)
+      const summary = await gatedWrite(
+        {
+          action:
+            rowCount === null
+              ? `Import holdings from ${file.name}`
+              : `Import ${rowCount} holding${rowCount === 1 ? '' : 's'} from ${file.name}`,
+          detail: 'Valid rows are saved; anything rejected comes back with a reason',
+          noun: 'holdings',
+        },
+        () => importHoldingsCsv(portfolioId, file),
+      )
       setReport(summary)
       setFile(null)
+      setRowCount(null)
       if (inputRef.current) inputRef.current.value = ''
       // Even an import where every row failed is worth refreshing on: the
       // cheap call is the one that tells the truth about what is stored now.
       onChanged()
     } catch (apiError) {
-      setError(apiError)
+      // Cancelled: keep the chosen file so the button is still armed.
+      if (!isCancellation(apiError)) setError(apiError)
     } finally {
       setImportingRun(null)
     }
@@ -372,16 +460,25 @@ function ImportForm({ portfolioId, onChanged }) {
           type="file"
           accept=".csv,text/csv"
           className="manage__file"
-          onChange={(event) => {
-            setFile(event.target.files?.[0] ?? null)
-            setError(null)
-          }}
+          onChange={pickFile}
         />
         <button type="submit" className="button button--small" disabled={isImporting || !file}>
           {isImporting ? 'Importing…' : 'Import'}
         </button>
-        {isImporting && <BusyNote isSlow={isSlow} idleLabel="Reading rows…" />}
+        {isImporting && (
+          <BusyNote
+            isSlow={isSlow}
+            isWaitingForPayment={pending !== null}
+            idleLabel="Reading rows…"
+          />
+        )}
       </div>
+
+      {file && rowCount !== null && !isImporting && (
+        <p className="manage__hint" role="status">
+          <strong>{file.name}</strong> — {rowCount} data row{rowCount === 1 ? '' : 's'} found.
+        </p>
+      )}
 
       {error && (
         <p className="banner banner--error" role="alert">
@@ -444,10 +541,10 @@ function ImportReport({ report }) {
    Shell
    --------------------------------------------------------------------------- */
 export default function ManageHoldings({ portfolioId, onChanged }) {
-  // The open/closed state of this panel IS the editing round - it is not
-  // tracked separately here, because two booleans that must agree are one
-  // booleans' worth of truth and twice the ways to disagree.
-  const { isUnlocked, isPaying, error, unlock, lock } = useUnlock()
+  // Read for one purpose only: to say so when a round is already paid for, and
+  // to offer the way out of it. Nothing in this panel is hidden or disabled by
+  // it - the forms below do not consult it at all.
+  const { isUnlocked, lock } = useUnlock()
 
   return (
     <section className="panel manage">
@@ -455,69 +552,41 @@ export default function ManageHoldings({ portfolioId, onChanged }) {
         <div>
           <h2 className="panel__title">Manage holdings</h2>
           <p className="panel__subtitle">
-            {isUnlocked
-              ? 'Editing is open — every panel above recomputes as you change things'
-              : `Add a position by hand or import a CSV — ${UNLOCK_PRICE_LABEL} per editing session`}
+            Add a position by hand or import a CSV. Editing costs{' '}
+            {UNLOCK_PRICE_LABEL} per round — you are asked when you save, not before.
           </p>
         </div>
-
-        {isUnlocked ? (
-          <button type="button" className="button button--small button--ghost" onClick={lock}>
-            Close
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="button button--small manage__unlock"
-            onClick={unlock}
-            disabled={isPaying}
-          >
-            {isPaying && <span className="spinner spinner--inline" aria-hidden="true" />}
-            {isPaying ? 'Opening checkout…' : `Unlock editing ${UNLOCK_PRICE_LABEL}`}
-          </button>
-        )}
       </div>
 
-      {isUnlocked ? (
-        <div className="panel__body manage__body">
-          <div className="manage__section">
-            <h3 className="manage__heading">Add one</h3>
-            <ManualForm portfolioId={portfolioId} onChanged={onChanged} />
-          </div>
-
-          <div className="manage__section">
-            <h3 className="manage__heading">Import a CSV</h3>
-            <ImportForm portfolioId={portfolioId} onChanged={onChanged} />
-          </div>
-
-          <p className="manage__round" role="status">
-            This round is paid for. Add and remove as much as you like — closing
-            this panel ends it, and the next round is another {UNLOCK_PRICE_LABEL}.
-          </p>
-        </div>
-      ) : (
-        <div className="panel__body manage__locked">
-          <p className="manage__locked-title">
-            <span aria-hidden="true">🔒</span> Editing is locked
-          </p>
-          <p className="manage__locked-body">
-            Viewing your dashboard is free. One payment of {UNLOCK_PRICE_LABEL} opens a
-            single editing session: add positions, import a CSV, and delete rows from the
-            holdings table below, as many as you need. Closing the panel — or reloading the
-            page — ends the session.
-          </p>
-          {/*
-            The failure lives here rather than in a toast: the button that
-            caused it is six pixels away, and a cancelled payment needs no
-            apology, only a way to try again.
-          */}
-          {error && (
-            <p className="banner banner--error manage__locked-error" role="alert">
-              {error.message}
-            </p>
-          )}
-        </div>
+      {/*
+        Only shown once a round is open. It is the answer to "have I already
+        paid?", which is a question a pay-at-submit flow invites and a paywall
+        never did - and it carries the control that ends the round, so the
+        server-side lifecycle is unchanged from when a Close button owned it.
+      */}
+      {isUnlocked && (
+        <p className="manage__round" role="status">
+          <span className="manage__round-text">
+            <strong>Editing round is open.</strong> Add, import and delete as much as you
+            like — you will not be asked to pay again until you end it or reload.
+          </span>
+          <button type="button" className="button button--small button--ghost" onClick={lock}>
+            End round
+          </button>
+        </p>
       )}
+
+      <div className="panel__body manage__body">
+        <div className="manage__section">
+          <h3 className="manage__heading">Add one</h3>
+          <ManualForm portfolioId={portfolioId} onChanged={onChanged} />
+        </div>
+
+        <div className="manage__section">
+          <h3 className="manage__heading">Import a CSV</h3>
+          <ImportForm portfolioId={portfolioId} onChanged={onChanged} />
+        </div>
+      </div>
     </section>
   )
 }

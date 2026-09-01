@@ -393,11 +393,29 @@ export default function AlertsPanel({ portfolioId }) {
         <RuleForm portfolioId={portfolioId} onCreated={onRuleCreated} />
 
         {events.length === 0 ? (
-          <p className="panel__placeholder">
-            {rules.length === 0
-              ? 'No rules yet. Add one above, then run `python manage.py scan_alerts` in the backend to check it.'
-              : 'No open alerts. Run `python manage.py scan_alerts` in the backend to check the rules now.'}
-          </p>
+          <div className="empty">
+            <span className="empty__icon" aria-hidden="true">
+              <BellIcon />
+            </span>
+            <p className="empty__title">
+              {rules.length === 0 ? 'No alert rules yet' : 'Nothing has fired'}
+            </p>
+            <p className="empty__body">
+              {rules.length === 0 ? (
+                <>
+                  Add a rule above — a metric, a direction and a threshold — then run{' '}
+                  <code>python manage.py scan_alerts</code> in the backend to check it against
+                  the current report.
+                </>
+              ) : (
+                <>
+                  All {rules.length} rule{rules.length === 1 ? '' : 's'} are within their
+                  thresholds. Run <code>python manage.py scan_alerts</code> to check them again
+                  now, or leave this open — breaches arrive here live.
+                </>
+              )}
+            </p>
+          </div>
         ) : (
           <ul className="alerts__feed">
             {events.map((event) => (
@@ -417,5 +435,21 @@ export default function AlertsPanel({ portfolioId }) {
         the breach still stands.
       </p>
     </section>
+  )
+}
+
+/** The empty-feed mark: a bell, with nothing ringing. */
+function BellIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M18 15.5V10a6 6 0 0 0-12 0v5.5L4.5 18h15L18 15.5ZM10 18a2 2 0 0 0 4 0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   )
 }

@@ -385,17 +385,81 @@ error if you hit it, but it is easier to avoid. (The API is still reached at
    "Send OTP" fails with `auth/operation-not-allowed`.
 2. **Authentication → Settings → Authorized domains**: `localhost` is there by
    default. Add your deployed domain when there is one.
-3. **Test numbers** (optional, and the fastest way to demo): under Phone →
-   *Phone numbers for testing*, add a number and a fixed six-digit code. That
-   pair signs in with no SMS, no charge and no rate limit — the backend still
-   receives a real, verifiable ID token.
+3. **Test numbers** — **required for local development**, see the next
+   section. Under **Authentication → Sign-in method → Phone → Phone numbers
+   for testing**, click *Add phone number* and enter a pair:
+
+   | Field | Example | Rules |
+   |-------|---------|-------|
+   | Phone number | `+91 99999 99999` | E.164, and it must be a number nobody actually owns |
+   | Verification code | `123456` | Exactly six digits, fixed, yours to choose |
+
+   That pair signs in with **no SMS, no charge and no rate limit**, and the
+   backend still receives a real, verifiable ID token — so every gate
+   downstream (session, portfolio, the ₹9 unlock) behaves exactly as it does
+   for a real user. Up to ten numbers per project. Type the number into the
+   login screen **exactly as registered**, and the fixed code in place of the
+   SMS.
+
+---
+
+### No reCAPTCHA image challenge in development
+
+Firebase will not send an OTP without an app-verification token, and on the web
+that means reCAPTCHA. The widget is configured `size: 'invisible'`, but
+*invisible* only means Google **may** stay out of the way — it decides per
+attempt, and a developer submitting the same form from the same browser twenty
+times an hour is the exact traffic shape its risk model distrusts. What you get
+is the photo grid: *select all the crosswalks*, several rounds of it.
+
+Running on `localhost`, the app now turns app verification off entirely:
+
+```js
+// src/firebase.js, at module scope
+auth.settings.appVerificationDisabledForTesting = true
+```
+
+Firebase then swaps in a **mock** reCAPTCHA — no script fetched from Google, no
+widget rendered, no challenge, ever. The login screen says so with a banner,
+and the browser console logs it on load.
+
+**The trade, and it is not optional:** with app verification off, only the
+**test numbers** from step 3 above can sign in. A real number sends a mock
+token, and Firebase rejects it. That is the whole reason step 3 is required
+rather than a nice-to-have.
+
+**To use a real number and a real SMS on localhost**, opt out:
+
+```bash
+# frontend/.env.local   (git-ignored; restart `npm run dev` after editing)
+VITE_FIREBASE_TEST_MODE=false
+```
+
+Set it to `true` instead to force test mode on a dev host that is not
+`localhost`.
+
+#### It cannot reach production
+
+Three guards, in `src/firebase.js`, and the first is the one that matters:
+
+1. `import.meta.env.DEV` — Vite replaces this with the literal `false` when
+   building, so the whole block is **dead code eliminated from the bundle**.
+   Confirm it yourself after `npm run build`:
+
+   ```bash
+   cd frontend
+   grep -c "VITE_FIREBASE_TEST_MODE" dist/assets/index-*.js   # -> 0
+   ```
+2. The hostname has to be `localhost` (or `::1`), so `npm run dev --host` on a
+   LAN address does not silently pick it up.
+3. `VITE_FIREBASE_TEST_MODE`, which overrides both ways, as above.
 
 ### What the screen does
 
 | Step | What happens |
 |------|--------------|
-| Phone | `signInWithPhoneNumber` with an **invisible reCAPTCHA**. No puzzle appears; the widget still has to exist, which is why the container div is always mounted. |
-| Code | `confirm(code)` signs you into Firebase. |
+| Phone | `signInWithPhoneNumber` with an **invisible reCAPTCHA** — mocked entirely in development. The container div is always mounted, because unmounting it would take the widget with it. |
+| Code | `confirm(code)` signs you into Firebase. For a test number this is the fixed code from the console, not an SMS. |
 | Then | `POST /api/auth/session/` with the fresh ID token; the returned `portfolio_id` is what every panel on the dashboard reads. |
 
 The header shows the signed-in number and a **Log out** button. The theme
@@ -403,11 +467,25 @@ toggle works on the login screen too.
 
 ### If "Send OTP" does nothing the second time
 
-That is the classic reCAPTCHA symptom: the token is single-use. This app
-clears and rebuilds the verifier after **every** attempt (see the comment at
-the top of `src/auth/LoginScreen.jsx`), so if you see it, the cause is
-elsewhere — check the browser console for the `auth/…` code and match it
-against `src/auth/firebase-errors.js`.
+That is the classic reCAPTCHA symptom: the token is single-use, and a screen
+that re-sends a spent one fails with `auth/invalid-app-credential`.
+
+This app builds the verifier **once** and **resets** it in the `finally` of
+every send, which retires the token and keeps the widget. (It used to destroy
+and rebuild the widget instead. That also worked, and it was part of *why*
+challenges appeared — a widget with no history on the page is a visitor with no
+history, which is who Google shows the photo grid to.) See the comment at the
+top of `src/auth/LoginScreen.jsx`.
+
+So if you still see it, the cause is elsewhere — check the browser console for
+the `auth/…` code and match it against `src/auth/firebase-errors.js`.
+
+| Console code | Usually means |
+|--------------|---------------|
+| `auth/invalid-app-credential` | Test mode is **on** and you typed a real number — use a registered test number, or set `VITE_FIREBASE_TEST_MODE=false` |
+| `auth/invalid-phone-number` | Not E.164 — it needs the `+` and the country code |
+| `auth/unauthorized-domain` | You opened `127.0.0.1` instead of `localhost` |
+| `auth/operation-not-allowed` | Phone sign-in is not enabled in the console |
 
 ### Where the config lives
 
@@ -425,6 +503,26 @@ Viewing the dashboard is free. **Editing holdings is not**: adding a position,
 importing a CSV and deleting a row all require a paid unlock, bought through
 Razorpay in **test mode**.
 
+### When the user is asked
+
+**At submit, never before.** The add form and the CSV import are always visible
+and always usable, and the delete buttons are always on the holdings table.
+Nothing in the UI is locked.
+
+The client simply attempts the write. If the server answers **402**, the browser
+parks that request, opens a modal summarising exactly what is about to be saved
+("Add RELIANCE.NS ×10", "Import 5 holdings from sample.csv", "Remove TCS.NS"),
+and offers one button: **Pay ₹9 & Save**. On a verified payment it re-runs the
+same request, closes the modal and refreshes the dashboard. If a round is
+already open the write just goes through and no modal appears.
+
+Cancelling the Razorpay sheet changes nothing: no charge, and the form still
+holds everything that was typed.
+
+This is a **client** change only. The gate, the amount, the signature check and
+the round lifecycle below are exactly as they were — the browser learns it has
+to pay from the 402 it gets back, not from anything it decides for itself.
+
 ### What one ₹9 buys
 
 One *editing round*. It starts when the payment signature verifies and ends at
@@ -432,7 +530,7 @@ whichever of these comes **first**:
 
 | # | Ends when | Triggered by |
 |---|-----------|--------------|
-| 1 | The user closes the Manage-holdings panel | the client (`POST /api/payments/finish/`) |
+| 1 | The user presses **End round** on the Manage-holdings panel, or leaves the dashboard | the client (`POST /api/payments/finish/`) |
 | 2 | A new order is created — it retires whatever was outstanding | the client |
 | 3 | `EDITING_UNLOCK_TTL` (20 minutes) after payment | **nobody** — this is the backstop |
 

@@ -14,11 +14,23 @@
  * by ticker, which is exactly the key the database already makes unique per
  * portfolio. A row whose id has not arrived yet simply renders no button rather
  * than a button that cannot work.
+ *
+ * DELETING COSTS ₹9, AND THIS COMPONENT DOES NOT KNOW THAT
+ * --------------------------------------------------------
+ * `onDelete` is a gated write - the dashboard wraps it so that a 402 opens the
+ * payment modal and the delete is retried after paying. From in here it is one
+ * async function that either resolves or throws, which is the whole point: the
+ * table renders positions, and nothing about a payment belongs in it.
+ *
+ * The single exception is the `payment_cancelled` check below. A user who opens
+ * the payment sheet and closes it again has not hit an error, and a red banner
+ * over the table would tell them they have.
  */
 
 import { useState } from 'react'
 
 import { money, moneyPrecise, percent, quantity } from '../format'
+import { PAYMENT_CANCELLED } from '../payments/unlock-context'
 
 const SOURCE_LABELS = {
   live: { text: 'Live', className: 'tag tag--live' },
@@ -53,8 +65,9 @@ export default function HoldingsTable({
     try {
       await onDelete(holdingId, ticker)
     } catch (apiError) {
-      // Kept in this panel. A failed delete must not blank the dashboard.
-      setError(apiError)
+      // Kept in this panel. A failed delete must not blank the dashboard - and
+      // a cancelled payment is not a failure at all, so it says nothing.
+      if (apiError?.code !== PAYMENT_CANCELLED) setError(apiError)
     } finally {
       setDeleting(null)
     }
@@ -64,14 +77,30 @@ export default function HoldingsTable({
     <section className="panel">
       <div className="panel__head">
         <h2 className="panel__title">Holdings</h2>
-        <p className="panel__subtitle">{holdings.length} positions</p>
+        <p className="panel__subtitle">
+          {holdings.length} position{holdings.length === 1 ? '' : 's'}
+        </p>
       </div>
-      <div className="panel__body panel__body--scroll">
-        {error && (
-          <p className="banner banner--error" role="alert">
-            <strong>Could not delete:</strong> {error.message}
+      {error && (
+        <p className="banner banner--error panel__banner" role="alert">
+          <strong>Could not delete:</strong> {error.message}
+        </p>
+      )}
+
+      {holdings.length === 0 ? (
+        <div className="empty">
+          <span className="empty__icon" aria-hidden="true">
+            <EmptyIcon />
+          </span>
+          <p className="empty__title">No positions yet</p>
+          <p className="empty__body">
+            Add one with the form above, or import a CSV. Everything else on this
+            dashboard - the risk metrics, the charts, the rebalance suggestion - is
+            computed from what lands here.
           </p>
-        )}
+        </div>
+      ) : (
+      <div className="panel__body panel__body--scroll">
         <table className="table">
           <thead>
             <tr>
@@ -146,6 +175,22 @@ export default function HoldingsTable({
           </tfoot>
         </table>
       </div>
+      )}
     </section>
+  )
+}
+
+/** The empty-table mark: a list with nothing on it. */
+function EmptyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M8 7h11M8 12h11M8 17h7M4.5 7h.01M4.5 12h.01M4.5 17h.01"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+      />
+    </svg>
   )
 }

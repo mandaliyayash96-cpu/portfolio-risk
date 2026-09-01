@@ -24,11 +24,12 @@
  * so no panel is ever describing a portfolio that no longer exists. Its own
  * failures stay inside it; a rejected CSV cannot touch the numbers on screen.
  *
- * The delete buttons in <HoldingsTable> are wired the same way the panel is
- * gated: `onDelete` is passed only while the editing round is paid for, and
- * HoldingsTable already renders read-only when it has no handler. So one
- * boolean hides the whole column, with no lock-aware code in that component at
- * all - and the backend refuses an unpaid delete regardless.
+ * The delete buttons in <HoldingsTable> are ALWAYS offered now. They used to be
+ * passed only while a round was paid for, which made sense when the panel above
+ * them was a paywall; with the paywall gone, a hidden delete column would be a
+ * feature no first-time user could discover. So `onDelete` is unconditional and
+ * routes through `gatedWrite` like every other write - the click attempts the
+ * delete, and the ₹9 modal appears only if the server refuses it.
  *
  * <AlertsPanel> is deliberately wired with nothing but the portfolio id. It owns
  * its own WebSocket, its own rules and its own errors, and shares no state with
@@ -91,6 +92,7 @@ import ManageHoldings from './components/ManageHoldings'
 import PerformancePanel from './components/PerformancePanel'
 import RebalanceCard from './components/RebalanceCard'
 import RiskCards from './components/RiskCards'
+import { DashboardSkeleton } from './components/Skeleton'
 import VarChart from './components/VarChart'
 
 // TODO Part 3: a portfolio picker, once an account can hold more than one and
@@ -99,9 +101,9 @@ import VarChart from './components/VarChart'
 const POLL_INTERVAL_MS = 30_000
 
 export default function Dashboard({ portfolioId }) {
-  // Only used to decide whether the holdings table offers its delete buttons -
-  // the panel itself reads the same context directly.
-  const { isUnlocked } = useUnlock()
+  // Deleting a holding is a gated write exactly like adding one, so it goes
+  // through the same wrapper: try it, and let the modal handle a 402.
+  const { gatedWrite } = useUnlock()
   // Which section is on screen. Plain state, no router: there is one page here
   // and these are not addresses - a tab is not worth a dependency, a history
   // entry, or a URL somebody could bookmark into a section that may not exist
@@ -245,24 +247,24 @@ export default function Dashboard({ portfolioId }) {
   )
 
   const removeHolding = useCallback(
-    async (holdingId) => {
-      await deleteHolding(portfolioId, holdingId)
+    async (holdingId, ticker) => {
+      await gatedWrite(
+        {
+          action: `Remove ${ticker}`,
+          detail: 'Deletes this position from your portfolio. This cannot be undone.',
+          noun: 'change',
+        },
+        () => deleteHolding(portfolioId, holdingId),
+      )
       refreshAll()
     },
-    [refreshAll, portfolioId],
+    [gatedWrite, refreshAll, portfolioId],
   )
 
-  // First load, nothing to show yet.
+  // First load, nothing to show yet. A skeleton of the real layout rather than
+  // a spinner on an empty page - see components/Skeleton.jsx for why.
   if (isLoading && !report) {
-    return (
-      <main className="page page--centered">
-        <div className="status">
-          <span className="spinner" aria-hidden="true" />
-          <p className="status__title">Computing risk report…</p>
-          <p className="status__detail">Portfolio {portfolioId}</p>
-        </div>
-      </main>
-    )
+    return <DashboardSkeleton />
   }
 
   // Failed before we ever had data: the error IS the page.
@@ -275,22 +277,44 @@ export default function Dashboard({ portfolioId }) {
   // form that adds one has to be reachable from the error page. The same is
   // true of `missing_price_data`, where the fix is often to delete the ticker
   // that has no prices.
+  //
+  // An empty portfolio is therefore rendered as an EMPTY STATE and not as a
+  // failure: no red, no error code, no Retry - just what to do next, with the
+  // form that does it directly underneath. A new user's first screen should not
+  // be an error, and 'empty_portfolio' is the one code here that means "nothing
+  // is wrong yet".
   if (error && !report) {
+    const isEmpty = error.code === 'empty_portfolio'
+
     return (
       <main className="page page--centered">
-        <div className="status status--error" role="alert">
-          <p className="status__badge">{error.code ?? 'error'}</p>
-          <p className="status__title">Could not load the risk report</p>
-          <p className="status__detail">{error.message}</p>
-          {error.details?.tickers && (
-            <p className="status__detail status__detail--muted">
-              Affected: {error.details.tickers.join(', ')}
+        {isEmpty ? (
+          <div className="status">
+            <span className="empty__icon" aria-hidden="true">
+              <PortfolioIcon />
+            </span>
+            <p className="status__title">Start your portfolio</p>
+            <p className="status__detail">
+              There is nothing to measure yet. Add a position below — or import a CSV
+              of them — and the risk report, the value curve and the rebalance
+              suggestion all build themselves from it.
             </p>
-          )}
-          <button type="button" className="button" onClick={retry}>
-            Retry
-          </button>
-        </div>
+          </div>
+        ) : (
+          <div className="status status--error" role="alert">
+            <p className="status__badge">{error.code ?? 'error'}</p>
+            <p className="status__title">Could not load the risk report</p>
+            <p className="status__detail">{error.message}</p>
+            {error.details?.tickers && (
+              <p className="status__detail status__detail--muted">
+                Affected: {error.details.tickers.join(', ')}
+              </p>
+            )}
+            <button type="button" className="button" onClick={retry}>
+              Retry
+            </button>
+          </div>
+        )}
 
         <div className="page__recovery">
           <ManageHoldings portfolioId={portfolioId} onChanged={retry} />
@@ -356,8 +380,7 @@ export default function Dashboard({ portfolioId }) {
           holdings={report.portfolio?.holdings}
           marketValue={report.portfolio?.market_value}
           holdingIds={holdingIds}
-          // Absent while locked, which is what makes the column disappear.
-          onDelete={isUnlocked ? removeHolding : undefined}
+          onDelete={removeHolding}
         />
       </Section>
 
@@ -379,6 +402,21 @@ export default function Dashboard({ portfolioId }) {
   )
 }
 
+/** The empty-portfolio mark: a bar chart with nothing in it yet. */
+function PortfolioIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M4 20h16M7 20v-5m5 5V9m5 11v-8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 /**
  * One tab's worth of dashboard.
  *
@@ -392,6 +430,17 @@ export default function Dashboard({ portfolioId }) {
  *
  * `role="tabpanel"` and the id pairing are what tie this back to the button in
  * <DashboardTabs> that controls it.
+ *
+ * THE `hidden` HALF OF THIS LIVES IN CSS
+ * --------------------------------------
+ * `hidden` is only as strong as `[hidden] { display: none }` in the browser's
+ * default stylesheet, which any class-based `display` in our own stylesheet
+ * outranks. `.tab-panel` sets `display: flex`, so for a while it did exactly
+ * that, and every tab rendered the holdings forms and the alerts feed on top
+ * of its own content - the attribute below was correct and had no effect.
+ * index.css now restates the rule at author level (globally in Reset, and
+ * again on `.tab-panel[hidden]`). If sections ever leak across tabs again,
+ * that is the first place to look, not this file.
  */
 function Section({ id, active, keepMounted = false, children }) {
   if (!active && !keepMounted) return null

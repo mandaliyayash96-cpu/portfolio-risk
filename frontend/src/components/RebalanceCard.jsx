@@ -27,6 +27,7 @@ import {
 
 import { useChartColors } from '../theme-context'
 import { percent } from '../format'
+import { PanelSkeleton } from './Skeleton'
 
 // Marker and frontier colours come from src/theme.js per theme; see
 // `frontier` there.
@@ -86,15 +87,10 @@ export default function RebalanceCard({ data, error, isLoading }) {
 
   if (isLoading && !data) {
     return (
-      <section className="panel">
-        <div className="panel__head">
-          <h2 className="panel__title">Rebalance suggestion</h2>
-        </div>
-        <div className="panel__body panel__placeholder">
-          <span className="spinner" aria-hidden="true" />
-          <p>Optimising…</p>
-        </div>
-      </section>
+      <PanelSkeleton
+        title="Rebalance suggestion"
+        subtitle="Optimising against the efficient frontier…"
+      />
     )
   }
 

@@ -1,18 +1,24 @@
 /**
  * Page header: what this is, whose money it is, and how current the numbers are.
  *
+ * TWO ROWS, SPLIT BY SUBJECT
+ * --------------------------
+ * The top bar is about the APP and the person using it - the mark, the product
+ * name, the signed-in number, the theme switch, the way out. The card below is
+ * about the MONEY - the portfolio's name, the window it was measured over, and
+ * the one figure that answers "what is it worth".
+ *
+ * They used to share a row, which put the Log out button an inch from the
+ * market value and made it read as a control for the amount. Separating them
+ * costs a line of vertical space and removes that reading entirely.
+ *
  * "As of" is deliberately two different times. `end` is the last trading date
  * in the measured window - the age of the DATA. `lastUpdated` is when the
  * browser last refreshed - the age of the SCREEN. On a projector those diverge
  * (nobody re-fetches prices mid-demo) and conflating them would be a lie.
  *
- * The theme toggle lives here because the header is the only element that spans
- * the full width at the top of the page. It sits inside `.header__aside` with
- * the market value rather than being absolutely positioned over the corner, so
- * it can never overlap the amount at a narrow width.
- *
- * The PDF download sits with them, under the market value, because the document
- * it produces is a snapshot of exactly what this header describes - the same
+ * The PDF download sits under the market value, because the document it
+ * produces is a snapshot of exactly what this header describes - the same
  * portfolio, the same window, the same numbers. Its failures stay local: a
  * report that cannot be generated shows a line of red text under the button and
  * leaves every panel on the page untouched.
@@ -28,6 +34,7 @@ import { useState } from 'react'
 import { ApiError, downloadRiskReportPdf, saveBlob } from '../api/client'
 import { useAuth } from '../auth/auth-context'
 import { isoDate, clockTime, money } from '../format'
+import BrandMark from './BrandMark'
 import ThemeToggle from './ThemeToggle'
 
 export default function Header({ report, lastUpdated, isRefreshing, portfolioId }) {
@@ -62,33 +69,15 @@ export default function Header({ report, lastUpdated, isRefreshing, portfolioId 
 
   return (
     <header className="header">
-      <div className="header__identity">
-        <p className="header__eyebrow">Investor Portfolio Monitoring &amp; Risk Management</p>
-        <h1 className="header__title">{portfolio?.name ?? 'Risk Dashboard'}</h1>
-        <p className="header__meta">
-          {report ? (
-            <>
-              <span>
-                {report.observations} trading days &middot; {isoDate(report.start)} to{' '}
-                {isoDate(report.end)}
-              </span>
-              {benchmark?.ticker && (
-                <>
-                  <span className="header__dot" aria-hidden="true" />
-                  <span>
-                    Benchmark {benchmark.ticker}
-                    {benchmark.included ? '' : ' (unavailable)'}
-                  </span>
-                </>
-              )}
-            </>
-          ) : (
-            <span>Connecting to the risk API…</span>
-          )}
-        </p>
-      </div>
+      <div className="header__bar">
+        <div className="header__brand">
+          <BrandMark />
+          <div className="header__wordmark">
+            <p className="header__eyebrow">Portfolio Risk</p>
+            <p className="header__product">Investor monitoring &amp; risk management</p>
+          </div>
+        </div>
 
-      <div className="header__aside">
         <div className="header__account">
           {phone && (
             <span className="header__phone" title="Signed in">
@@ -102,6 +91,32 @@ export default function Header({ report, lastUpdated, isRefreshing, portfolioId 
             </button>
           )}
         </div>
+      </div>
+
+      <div className="header__summary">
+        <div className="header__headline">
+          <h1 className="header__title">{portfolio?.name ?? 'Risk Dashboard'}</h1>
+          <div className="header__meta">
+            {report ? (
+              <>
+                <span className="chip">
+                  {report.observations} trading days
+                </span>
+                <span className="chip chip--muted">
+                  {isoDate(report.start)} → {isoDate(report.end)}
+                </span>
+                {benchmark?.ticker && (
+                  <span className="chip chip--muted">
+                    Benchmark {benchmark.ticker}
+                    {benchmark.included ? '' : ' (unavailable)'}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="chip chip--muted">Connecting to the risk API…</span>
+            )}
+          </div>
+        </div>
 
         <div className="header__value">
           <p className="header__value-label">Market value</p>
@@ -114,10 +129,12 @@ export default function Header({ report, lastUpdated, isRefreshing, portfolioId 
             Updated {clockTime(lastUpdated)}
             {isRefreshing && <span className="header__refreshing"> · refreshing</span>}
           </p>
+        </div>
 
+        <div className="header__actions">
           <button
             type="button"
-            className="button button--small button--ghost header__download"
+            className="button button--small button--ghost"
             onClick={downloadReport}
             disabled={isDownloading || reportId == null}
           >

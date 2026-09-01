@@ -14,7 +14,7 @@
  *      in SVG presentation attributes in modern browsers - which is why the
  *      existing axes already themed - series colours cannot be handled that way
  *      for two reasons. A hue chosen to read on white is not the same hue that
- *      reads on near-black (#1d4ed8 is a confident blue on paper and a muddy
+ *      reads on near-black (#047857 is a confident emerald on paper and a muddy
  *      smudge on a dark panel, so this is a different value, not the same value
  *      re-expressed), and Recharts' <Legend> renders its labels through inline
  *      styles derived from the series colour in JS, where `var()` is just an
@@ -90,10 +90,10 @@ export function resolveInitialTheme() {
  */
 export const CHART_COLORS = {
   [LIGHT]: {
-    axis: '#5c6b81', //        mirrors --ink-muted
-    axisLine: '#d8dfe9', //    mirrors --border
-    grid: '#e8edf4', //        mirrors --border-soft
-    cursor: '#f1f5f9', //      mirrors --surface-sunken
+    axis: '#5b6b65', //        mirrors --ink-muted
+    axisLine: '#dce6e1', //    mirrors --border
+    grid: '#eaf1ed', //        mirrors --border-soft
+    cursor: '#eef4f1', //      mirrors --surface-sunken
     // Slices and markers are outlined in the panel colour so they read as cut
     // out of the card rather than stacked on top of it.
     surface: '#ffffff', //     mirrors --surface
@@ -101,96 +101,99 @@ export const CHART_COLORS = {
     /**
      * Categorical ramp for the allocation pie: eight hues that stay
      * distinguishable on a washed-out projector and in greyscale print.
-     * Deliberately not the red/green risk vocabulary - a slice of an allocation
-     * is neither good nor bad.
+     *
+     * It OPENS on the brand emerald, so the largest slice ties the chart to the
+     * rest of the page, and then leaves the risk vocabulary alone entirely -
+     * neither the teal of `good` nor the rose of `bad` appears here, because a
+     * slice of an allocation is not a verdict on it.
      */
     categorical: [
-      '#2563eb',
-      '#0891b2',
+      '#047857',
+      '#0e7490',
       '#7c3aed',
       '#c2410c',
-      '#0f766e',
-      '#a21caf',
       '#4d7c0f',
+      '#a21caf',
+      '#1d4ed8',
       '#b45309',
     ],
 
     /**
      * The Performance panel's two charts.
      *
-     * `value` is --accent and `drawdown` is --bad, reused rather than invented:
-     * the underwater chart IS a risk chart, so it belongs in this dashboard's
-     * red/green risk vocabulary, and the value curve is the page's primary
-     * series exactly as the accent is its primary colour.
+     * `value` is the brand and `drawdown` is --bad, reused rather than
+     * invented: the underwater chart IS a risk chart, so it belongs in this
+     * dashboard's risk vocabulary, and the value curve is the page's primary
+     * series exactly as the brand is its primary colour.
      *
      * `label` is body ink, for the callout on the deepest drawdown - a data
      * label wears a text colour, never the series colour.
      */
     performance: {
-      value: '#1d4ed8', //     mirrors --accent
-      drawdown: '#b91c1c', //  mirrors --bad
-      label: '#0f172a', //     mirrors --ink
+      value: '#047857', //     mirrors --brand
+      drawdown: '#be123c', //  mirrors --bad
+      label: '#0f1d18', //     mirrors --ink
     },
 
     /** The three VaR estimates. Ordered as they appear on the chart. */
     var: {
-      historical: '#1d4ed8',
-      parametric: '#0891b2',
+      historical: '#047857',
+      parametric: '#0e7490',
       montecarlo: '#7c3aed',
     },
 
     /** The efficient frontier and the three portfolios marked on it. */
     frontier: {
-      // Darkened from the slate-400 this used to be: at 2.56:1 on white the
-      // curve fell under the 3:1 floor for a non-text graphic and was the first
-      // thing to disappear on a projector.
-      curve: '#7d8da3',
-      current: '#b91c1c', //     mirrors --bad
-      minVariance: '#047857', // mirrors --good
+      // Green-slate rather than neutral, to sit in the same family as the page.
+      // Measured 3.43:1 on --surface, which clears the 3:1 floor for a
+      // non-text graphic - the curve was the first thing to disappear on a
+      // projector when it was lighter than this.
+      curve: '#7c8f88',
+      current: '#be123c', //     mirrors --bad
+      minVariance: '#0f766e', // mirrors --good
       maxSharpe: '#7c3aed',
     },
   },
 
   [DARK]: {
-    axis: '#94a3b8', //        mirrors --ink-muted (dark)
-    axisLine: '#2c3a52', //    mirrors --border (dark)
-    grid: '#22304a', //        mirrors --border-soft (dark)
-    cursor: '#1a2740', //      mirrors --surface-sunken (dark)
-    surface: '#111c2e', //     mirrors --surface (dark)
+    axis: '#8a9c94', //        mirrors --ink-muted (dark)
+    axisLine: '#26382f', //    mirrors --border (dark)
+    grid: '#1d2e27', //        mirrors --border-soft (dark)
+    cursor: '#16261f', //      mirrors --surface-sunken (dark)
+    surface: '#0f1d18', //     mirrors --surface (dark)
 
     // Every hue is lifted into the 60-75% lightness band. On a near-black panel
     // a mid-tone loses its identity long before it loses its contrast, so these
     // are brighter rather than merely lighter versions of the light ramp.
     categorical: [
-      '#60a5fa',
+      '#34d399',
       '#22d3ee',
       '#a78bfa',
       '#fb923c',
-      '#2dd4bf',
-      '#e879f9',
       '#a3e635',
+      '#f0abfc',
+      '#60a5fa',
       '#fbbf24',
     ],
 
     performance: {
-      value: '#60a5fa', //     mirrors --accent (dark)
-      drawdown: '#f87171', //  mirrors --bad (dark)
-      label: '#f1f5f9', //     mirrors --ink (dark)
+      value: '#34d399', //     mirrors --brand (dark)
+      drawdown: '#fb7185', //  mirrors --bad (dark)
+      label: '#e8f0ec', //     mirrors --ink (dark)
     },
 
     var: {
-      historical: '#60a5fa',
+      historical: '#34d399',
       parametric: '#22d3ee',
       montecarlo: '#a78bfa',
     },
 
     frontier: {
       // The curve stays deliberately desaturated: it is context, and the three
-      // marked portfolios are the subject. Slate-400 clears the panel
-      // comfortably without competing with them.
-      curve: '#94a3b8',
-      current: '#f87171', //     mirrors --bad (dark)
-      minVariance: '#34d399', // mirrors --good (dark)
+      // marked portfolios are the subject.
+      curve: '#8a9c94',
+      current: '#fb7185', //     mirrors --bad (dark)
+      minVariance: '#2dd4bf', // mirrors --good (dark)
       maxSharpe: '#a78bfa',
     },
   },

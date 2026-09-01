@@ -26,6 +26,7 @@
 
 import { useAuth } from './auth/auth-context'
 import LoginScreen from './auth/LoginScreen'
+import BrandMark from './components/BrandMark'
 import Dashboard from './Dashboard'
 import { UnlockProvider } from './payments/UnlockProvider'
 
@@ -37,8 +38,10 @@ export default function App() {
     return (
       <main className="page page--centered">
         <div className="status">
-          <span className="spinner" aria-hidden="true" />
+          <BrandMark />
           <p className="status__title">Signing you in…</p>
+          <p className="status__detail">Restoring your session.</p>
+          <span className="spinner" aria-hidden="true" />
         </div>
       </main>
     )
