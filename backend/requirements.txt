@@ -37,6 +37,13 @@ celery==5.6.3
 # what to add when schedules need editing at runtime instead of at deploy time.
 # django-celery-beat==2.*
 
+# Phase 9 — the downloadable risk report.
+# Pure-Python PDF generation, no system libraries to install (which is why this
+# rather than WeasyPrint/wkhtmltopdf, both of which need native deps on
+# Windows). Note: its built-in fonts are WinAnsi-encoded and have no rupee
+# glyph — risk/report_pdf.py explains what that means for money formatting.
+reportlab==5.0.1
+
 # Phase 7 — React dev server talks to this API cross-origin.
 # django-cors-headers==4.*
 

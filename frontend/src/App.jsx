@@ -241,7 +241,12 @@ export default function App() {
 
   return (
     <main className="page">
-      <Header report={report} lastUpdated={lastUpdated} isRefreshing={isRefreshing} />
+      <Header
+        report={report}
+        lastUpdated={lastUpdated}
+        isRefreshing={isRefreshing}
+        portfolioId={PORTFOLIO_ID}
+      />
 
       {error && (
         <p className="banner banner--error" role="alert">

@@ -235,3 +235,114 @@ export const CSV_TEMPLATE = [
   'TCS.NS,5,3200.00,2026-01-06,EQUITY,IT',
   '',
 ].join('\n')
+
+/* ---------------------------------------------------------------------------
+   The risk report as a document
+   --------------------------------------------------------------------------- */
+
+/**
+ * Fetch the PDF of a portfolio's risk report.
+ *
+ * Resolves with `{blob, filename}` — the file, and the name the server asked
+ * for it to be saved under.
+ *
+ * WHY THIS DOES NOT GO THROUGH `request()`
+ * ----------------------------------------
+ * Every other call in this module unwraps an envelope. This one must not: on
+ * success the body is a binary PDF with no envelope anywhere in it, so the
+ * shared helper's `envelope.data` would be meaningless.
+ *
+ * THE ERROR CASE IS THE INTERESTING HALF
+ * --------------------------------------
+ * With `responseType: 'blob'`, axios gives back a Blob for EVERY response —
+ * including a 404 whose body is a perfectly good JSON envelope. Reading
+ * `error.response.data.error.message` on that yields undefined, and the classic
+ * bug from here is to save the failure to disk as a 200-byte `report.pdf`. So a
+ * failed response is read back as text and parsed before its message is used.
+ *
+ * @throws {ApiError} carrying the backend's own message and code.
+ */
+export async function downloadRiskReportPdf(portfolioId) {
+  let response
+  try {
+    response = await api.request({
+      method: 'get',
+      url: `/api/risk/${portfolioId}/report.pdf`,
+      responseType: 'blob',
+      // The report is recomputed per request and the Monte Carlo leg is not
+      // instant, so this gets the write-path budget rather than the 30s one.
+      timeout: WRITE_TIMEOUT_MS,
+    })
+  } catch (error) {
+    throw await blobError(error)
+  }
+
+  // A 200 whose body is JSON should not happen — but rendering a JSON envelope
+  // as a PDF in a viewer is a uniquely confusing way to find out that it did.
+  const type = response.headers['content-type'] ?? ''
+  if (!type.includes('application/pdf')) {
+    const envelope = await readEnvelope(response.data)
+    throw new ApiError(
+      envelope?.error?.message ?? 'The server did not return a PDF.',
+      { code: envelope?.error?.code ?? 'unexpected_response', status: response.status },
+    )
+  }
+
+  return {
+    blob: response.data,
+    filename: filenameFrom(response.headers['content-disposition'], portfolioId),
+  }
+}
+
+/** Read a Blob body back as a parsed envelope, or null if it was not JSON. */
+async function readEnvelope(blob) {
+  try {
+    return JSON.parse(await blob.text())
+  } catch {
+    return null
+  }
+}
+
+/** Translate a failed blob request into an ApiError carrying the real message. */
+async function blobError(error) {
+  const body = error.response?.data
+  if (body instanceof Blob) {
+    const envelope = await readEnvelope(body)
+    if (envelope?.error?.message) {
+      return new ApiError(envelope.error.message, {
+        code: envelope.error.code,
+        details: envelope.error.details,
+        status: error.response.status,
+      })
+    }
+  }
+  return transportError(error)
+}
+
+/**
+ * Pull the filename out of `Content-Disposition`, falling back to something
+ * sensible. The server already slugifies it, so this only has to unwrap the
+ * quotes rather than sanitise anything.
+ */
+function filenameFrom(disposition, portfolioId) {
+  const match = /filename="?([^";]+)"?/i.exec(disposition ?? '')
+  return match?.[1] ?? `risk-report-${portfolioId}.pdf`
+}
+
+/**
+ * Hand a fetched blob to the browser as a download.
+ *
+ * The anchor is created, clicked and removed synchronously; the object URL is
+ * revoked on the next tick rather than immediately, because revoking it in the
+ * same frame as the click cancels the download in some browsers.
+ */
+export function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}

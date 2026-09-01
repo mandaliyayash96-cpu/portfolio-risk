@@ -10,14 +10,48 @@
  * the full width at the top of the page. It sits inside `.header__aside` with
  * the market value rather than being absolutely positioned over the corner, so
  * it can never overlap the amount at a narrow width.
+ *
+ * The PDF download sits with them, under the market value, because the document
+ * it produces is a snapshot of exactly what this header describes - the same
+ * portfolio, the same window, the same numbers. Its failures stay local: a
+ * report that cannot be generated shows a line of red text under the button and
+ * leaves every panel on the page untouched.
  */
 
+import { useState } from 'react'
+
+import { ApiError, downloadRiskReportPdf, saveBlob } from '../api/client'
 import { isoDate, clockTime, money } from '../format'
 import ThemeToggle from './ThemeToggle'
 
-export default function Header({ report, lastUpdated, isRefreshing }) {
+export default function Header({ report, lastUpdated, isRefreshing, portfolioId }) {
   const portfolio = report?.portfolio
   const benchmark = report?.benchmark
+
+  const [isDownloading, setIsDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState(null)
+
+  // The id is taken from the report when the caller did not pass one, so this
+  // component keeps working if it is ever mounted without the prop.
+  const reportId = portfolioId ?? portfolio?.id
+
+  async function downloadReport() {
+    if (isDownloading || reportId == null) return
+
+    setIsDownloading(true)
+    setDownloadError(null)
+    try {
+      const { blob, filename } = await downloadRiskReportPdf(reportId)
+      saveBlob(blob, filename)
+    } catch (error) {
+      // Shown, never thrown: the dashboard must survive a failed download.
+      setDownloadError(
+        error instanceof ApiError ? error : new ApiError('Could not generate the report.'),
+      )
+    } finally {
+      setIsDownloading(false)
+    }
+  }
 
   return (
     <header className="header">
@@ -61,6 +95,22 @@ export default function Header({ report, lastUpdated, isRefreshing }) {
             Updated {clockTime(lastUpdated)}
             {isRefreshing && <span className="header__refreshing"> · refreshing</span>}
           </p>
+
+          <button
+            type="button"
+            className="button button--small button--ghost header__download"
+            onClick={downloadReport}
+            disabled={isDownloading || reportId == null}
+          >
+            {isDownloading && <span className="spinner spinner--inline" aria-hidden="true" />}
+            {isDownloading ? 'Preparing…' : 'Download report (PDF)'}
+          </button>
+
+          {downloadError && (
+            <p className="header__download-error" role="alert">
+              {downloadError.message}
+            </p>
+          )}
         </div>
       </div>
     </header>

@@ -170,6 +170,19 @@ CORS_ALLOWED_ORIGINS = [
 # auth from the SPA) also requires CSRF_TRUSTED_ORIGINS.
 CORS_ALLOW_CREDENTIALS = False
 
+# Content-Disposition is SENT on the PDF report either way - a browser
+# navigating straight to the URL downloads it correctly with no help from here.
+# But the dashboard fetches it with XHR, and cross-origin JavaScript can only
+# read the six CORS-safelisted response headers unless the server names the
+# others explicitly. Without this line `response.headers['content-disposition']`
+# is undefined in the browser, and every download silently falls back to a
+# generic filename instead of "risk-report-my-demo-2026-08-31.pdf".
+#
+# Invisible from curl, which is not subject to CORS at all: the header is
+# present in the response whether or not this setting exists. It only affects
+# what the BROWSER lets the page see.
+CORS_EXPOSE_HEADERS = ["Content-Disposition"]
+
 # TODO Phase 8 (prod): serve the built SPA from the same origin as the API so
 # CORS stops applying at all, or read this list from an env var pinned to the
 # deployed domain. Never CORS_ALLOW_ALL_ORIGINS = True outside local dev.

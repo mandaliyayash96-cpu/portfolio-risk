@@ -1476,3 +1476,32 @@ code {
   margin-top: 24px;
   text-align: left;
 }
+
+/* ---------------------------------------------------------------------------
+   Download report button
+
+   Lives under the market value in the header. Reuses .button--ghost so it
+   reads as a secondary control next to the amount rather than competing with
+   it, and every colour is a token, so dark mode needs nothing extra here.
+   --------------------------------------------------------------------------- */
+.header__download {
+  /* inline-flex, so the parent's `text-align: right` positions it and the
+     spinner still sits on the text baseline inside it. */
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  white-space: nowrap;
+}
+
+.header__download-error {
+  max-width: 260px;
+  /* `margin-left: auto` and not `text-align` alone: this is a block with a
+     max-width, so text-align would right-align the WORDS inside a box still
+     sitting on the left. Both are needed - one moves the box, one the text. */
+  margin: 8px 0 0 auto;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--bad);
+  text-align: right;
+}
