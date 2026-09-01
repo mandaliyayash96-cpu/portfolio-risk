@@ -1797,3 +1797,108 @@ code {
   border: 1px solid var(--good-border);
   border-radius: 8px;
 }
+
+/* ---------------------------------------------------------------------------
+   Section tabs
+
+   One section of the dashboard on screen at a time. The header, the status
+   banners and the footer sit outside this and are always visible.
+
+   Every colour is a token, so dark mode needs nothing here.
+   --------------------------------------------------------------------------- */
+
+/*
+  REQUIRED, not defensive.
+
+  The `hidden` attribute is styled `display: none` by the browser's OWN
+  stylesheet, which any author rule beats - and `.panel` sets `display: flex`.
+  Without this line the inactive sections that stay mounted (Holdings, Alerts)
+  would remain fully visible, and the tabs would appear to do nothing for two
+  of the six. `!important` because it has to outrank whatever a panel sets.
+*/
+[hidden] {
+  display: none !important;
+}
+
+.tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tabs__list {
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  /* Six labels do not fit on a phone. Scroll the BAR rather than wrapping it
+     to two rows, so the page below never shifts down as tabs rewrap. */
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tab {
+  flex: none;
+  padding: 9px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--ink-muted);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab:hover:not(.tab--active) {
+  color: var(--ink);
+  background: var(--surface-sunken);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/*
+  The selected tab is filled rather than underlined. An underline on a bar this
+  wide is a two-pixel difference at the back of a room; a filled chip survives
+  a projector, which is what the rest of this stylesheet is built for.
+*/
+.tab--active {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+.tabs__hint {
+  padding-left: 4px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+/*
+  The panel itself is a plain stack. It carries the same 24px rhythm the page
+  had when every section was on it, so moving a panel into a tab does not
+  change how it sits against its neighbours.
+*/
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* The panel is focusable (see Dashboard.jsx) so keyboard users land somewhere
+   after the tablist; it should not draw a focus ring when clicked into. */
+.tab-panel:focus {
+  outline: none;
+}
+
+.tab-panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius);
+}

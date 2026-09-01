@@ -35,6 +35,39 @@
  * the report above it - so an alert feed that cannot connect, or a Redis that is
  * down, degrades to one panel showing a grey dot rather than taking the risk
  * dashboard with it. This component never awaits it and never reads from it.
+ *
+ * ONE SECTION AT A TIME
+ * ---------------------
+ * The panels are grouped into tabs (<DashboardTabs>) and only one group is on
+ * screen at once. The header, the status banners and the footer sit OUTSIDE
+ * that - they describe the whole report, not a section of it.
+ *
+ * Nothing about fetching changed. Every panel still receives exactly what it
+ * received before, on the same 30-second tick, whether or not its tab is the
+ * one being shown: the poll is one request set for the whole page and always
+ * was. Tabs decide what is PAINTED, not what is loaded.
+ *
+ * TWO WAYS TO HIDE A SECTION, AND WHY BOTH ARE HERE
+ * -------------------------------------------------
+ * `<Section keepMounted>` renders and hides with the `hidden` attribute;
+ * without it, an inactive section is not rendered at all. Which one a panel
+ * gets is decided by what it would LOSE:
+ *
+ *   keepMounted   <AlertsPanel>     owns a WebSocket. Unmounting it on every
+ *                                   tab switch would close and reopen the
+ *                                   socket, and a breach that fired while you
+ *                                   were reading the Risk tab would arrive as
+ *                                   a reconnect rather than an alert.
+ *                 <ManageHoldings>  owns form state and the CSV import report.
+ *                                   Switching tabs mid-edit must not throw
+ *                                   away a half-typed position or the report
+ *                                   saying which two rows failed.
+ *
+ *   unmounted     everything with a chart in it. Recharts measures its
+ *                 container, and a container inside `display: none` measures
+ *                 zero - so a chart first rendered while hidden can come back
+ *                 blank. Mounting it fresh when its tab opens sidesteps that
+ *                 entirely, and costs one render of data already in memory.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -50,6 +83,8 @@ import { useUnlock } from './payments/unlock-context'
 import AlertsPanel from './components/AlertsPanel'
 import AllocationPie from './components/AllocationPie'
 import CorrelationHeatmap from './components/CorrelationHeatmap'
+import DashboardTabs from './components/DashboardTabs'
+import { DEFAULT_TAB } from './components/dashboard-tabs'
 import Header from './components/Header'
 import HoldingsTable from './components/HoldingsTable'
 import ManageHoldings from './components/ManageHoldings'
@@ -67,6 +102,11 @@ export default function Dashboard({ portfolioId }) {
   // Only used to decide whether the holdings table offers its delete buttons -
   // the panel itself reads the same context directly.
   const { isUnlocked } = useUnlock()
+  // Which section is on screen. Plain state, no router: there is one page here
+  // and these are not addresses - a tab is not worth a dependency, a history
+  // entry, or a URL somebody could bookmark into a section that may not exist
+  // in the next version.
+  const [tab, setTab] = useState(DEFAULT_TAB)
   const [report, setReport] = useState(null)
   const [error, setError] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -280,22 +320,38 @@ export default function Dashboard({ portfolioId }) {
         </p>
       ))}
 
-      <PerformancePanel data={performance} error={performanceError} isLoading={isLoading} />
+      <DashboardTabs active={tab} onChange={setTab} />
 
-      <RiskCards report={report} />
-
-      <RebalanceCard data={rebalance} error={rebalanceError} isLoading={isLoading} />
-
-      <ManageHoldings portfolioId={portfolioId} onChanged={refreshAll} />
-
-      <AlertsPanel portfolioId={portfolioId} />
-
-      <div className="grid grid--halves">
+      <Section id="overview" active={tab === 'overview'}>
+        <RiskCards report={report} />
         <AllocationPie holdings={report.portfolio?.holdings} />
-        <VarChart report={report} />
-      </div>
+      </Section>
 
-      <div className="grid grid--halves">
+      <Section id="performance" active={tab === 'performance'}>
+        <PerformancePanel data={performance} error={performanceError} isLoading={isLoading} />
+      </Section>
+
+      {/*
+        RiskCards appears here as well as on Overview, and that is deliberate:
+        a tab called "Risk" that opened on two charts and no numbers would be
+        the wrong answer to the click. Overview shows them as a summary; this
+        shows them as the headline over the detail.
+      */}
+      <Section id="risk" active={tab === 'risk'}>
+        <RiskCards report={report} />
+        <div className="grid grid--halves">
+          <VarChart report={report} />
+          <CorrelationHeatmap matrix={report.correlation_matrix} />
+        </div>
+      </Section>
+
+      <Section id="rebalance" active={tab === 'rebalance'}>
+        <RebalanceCard data={rebalance} error={rebalanceError} isLoading={isLoading} />
+      </Section>
+
+      {/* keepMounted: the forms and the import report must survive a tab switch. */}
+      <Section id="holdings" active={tab === 'holdings'} keepMounted>
+        <ManageHoldings portfolioId={portfolioId} onChanged={refreshAll} />
         <HoldingsTable
           holdings={report.portfolio?.holdings}
           marketValue={report.portfolio?.market_value}
@@ -303,8 +359,12 @@ export default function Dashboard({ portfolioId }) {
           // Absent while locked, which is what makes the column disappear.
           onDelete={isUnlocked ? removeHolding : undefined}
         />
-        <CorrelationHeatmap matrix={report.correlation_matrix} />
-      </div>
+      </Section>
+
+      {/* keepMounted: closing the socket on every tab switch would lose breaches. */}
+      <Section id="alerts" active={tab === 'alerts'} keepMounted>
+        <AlertsPanel portfolioId={portfolioId} />
+      </Section>
 
       <footer className="footer">
         <span>
@@ -316,5 +376,39 @@ export default function Dashboard({ portfolioId }) {
         </span>
       </footer>
     </main>
+  )
+}
+
+/**
+ * One tab's worth of dashboard.
+ *
+ * `keepMounted` is the whole of the difference between the two hiding
+ * strategies described at the top of this file: with it, the section is always
+ * in the DOM and the `hidden` attribute takes it off screen, so anything alive
+ * inside it - a socket, a half-filled form - stays alive. Without it, an
+ * inactive section is not rendered, which is what a chart wants: Recharts
+ * measures its container, and a container that has never been visible measures
+ * zero.
+ *
+ * `role="tabpanel"` and the id pairing are what tie this back to the button in
+ * <DashboardTabs> that controls it.
+ */
+function Section({ id, active, keepMounted = false, children }) {
+  if (!active && !keepMounted) return null
+
+  return (
+    <section
+      id={`panel-${id}`}
+      role="tabpanel"
+      aria-labelledby={`tab-${id}`}
+      className="tab-panel"
+      hidden={!active}
+      // Without a tabindex the panel itself is not focusable, so a keyboard
+      // user pressing Tab out of the tablist lands on the first control INSIDE
+      // it - fine for Holdings, but it skips a panel that is only charts.
+      tabIndex={active ? 0 : -1}
+    >
+      {children}
+    </section>
   )
 }
