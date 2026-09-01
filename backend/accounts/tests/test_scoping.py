@@ -7,12 +7,18 @@ The rule under test (accounts.selectors.resolve_portfolio_id):
                                          whatever id the URL carries
     anything else                    ->  the id in the URL, unchanged
 
-The second half is the Part 1 compromise that keeps portfolio 1 curl-able while
-the login screen is still being built, and it is asserted here too - so that
-when Part 3 removes it, the test that has to change says exactly what changed.
+The second half - an anonymous caller still addressing the id in the URL - is
+asserted here too, because it is a deliberate decision rather than an oversight
+and its removal should be a visible edit to this file.
+
+That decision survived Part 3. Payment gating closed the three holdings WRITES
+(401 without an account, 402 without a paid unlock); READS were deliberately
+left open, so the dashboard is worth looking at before anyone is asked to pay
+to change it, and `curl /api/risk/1/` still works.
 
 Nothing here goes near the market data provider: every row is created through
-the ORM, and the only endpoints exercised are ones that read.
+the ORM, and every endpoint exercised is a read - except the one delete, which
+grants itself an unlock first.
 """
 
 from datetime import date
@@ -76,13 +82,18 @@ class TestAuthenticatedCallersReadTheirOwnPortfolio:
         assert {row["portfolio_id"] for row in response.json()["data"]} == {my_portfolio.pk}
 
     def test_delete_cannot_reach_into_another_portfolio(
-        self, signed_in, my_portfolio, other_investors_portfolio
+        self, signed_in, my_portfolio, other_investors_portfolio, paid_unlock
     ):
         """
         Both ids guessed correctly and it still 404s: the portfolio id is
         replaced by the caller's own before it is used to scope the lookup.
+
+        The unlock is granted first so that the 404 is the SCOPING answer.
+        Without it the request would stop at the payment gate with a 402, and
+        this test would pass while proving nothing about whose data it is.
         """
         theirs = add_holding_row(other_investors_portfolio, "TCS.NS")
+        paid_unlock()
 
         with signed_in() as (api, _):
             response = api.delete(
@@ -109,12 +120,13 @@ class TestAuthenticatedCallersReadTheirOwnPortfolio:
         assert response.json()["error"]["code"] == "empty_portfolio"
 
 
-class TestAnonymousCallersDuringPart1:
+class TestAnonymousCallersReadTheUrlId:
     """
-    The deliberate hole, asserted so its removal is a visible edit.
+    Reads are open to anyone, and address the id in the URL.
 
-    TODO Part 3: these two tests become "401" when IsAuthenticated goes on the
-    data endpoints and the URL-id fallback comes out of resolve_portfolio_id.
+    Still true after Part 3, and on purpose: only the WRITES are gated. If
+    reads are ever closed too, these are the two tests that have to change, and
+    they will say exactly what changed.
     """
 
     def test_an_anonymous_caller_still_reads_the_url_id(self, other_investors_portfolio, api):

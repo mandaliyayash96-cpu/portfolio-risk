@@ -23,12 +23,15 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
-from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils import timezone
 from rest_framework.test import APIClient
 
+from accounts.selectors import get_my_portfolio
+from accounts.services import resolve_app_user
 from common.exceptions import UnknownTickerError
 from marketdata.providers import MarketDataProvider
+from payments.models import Payment, PaymentStatus
 from portfolio.models import Holding, Portfolio
 
 #: Where settings.MARKET_DATA_PROVIDER points during the view tests. Spelled
@@ -96,13 +99,28 @@ def stub_provider_setting(settings) -> str:
 
 @pytest.fixture
 def investor(db):
-    return get_user_model().objects.create_user(username="holdings-investor", password="x")
+    """
+    A signed-in investor, built the way a first login builds one.
+
+    Not a bare create_user any more. Two things changed under these tests: a
+    holdings WRITE now needs an account that can hold a payment (Part 3), and
+    an authenticated caller is scoped to their OWN portfolio rather than to the
+    id in the URL (Part 1). So the user and the portfolio under test have to be
+    the same pair the application itself would have created.
+    """
+    return resolve_app_user("+919876500001").user
 
 
 @pytest.fixture
 def portfolio(investor) -> Portfolio:
-    """An empty portfolio - every test here is about putting things in it."""
-    return Portfolio.objects.create(user=investor, name="Manual", base_currency="INR")
+    """
+    The investor's own portfolio - the one `accounts` auto-created, still empty.
+
+    Returned rather than created: `resolve_portfolio_id` sends every
+    authenticated write to `get_my_portfolio(user)`, so a second portfolio made
+    here would be one the endpoints never touch.
+    """
+    return get_my_portfolio(investor)
 
 
 @pytest.fixture
@@ -127,7 +145,33 @@ def holding_factory(portfolio):
 
 @pytest.fixture
 def api() -> APIClient:
+    """An anonymous client. Reads are free and still work with no identity."""
     return APIClient()
+
+
+@pytest.fixture
+def editor(investor) -> APIClient:
+    """
+    A signed-in client holding a paid editing unlock.
+
+    Both halves, because a holdings write now needs both: an account (401
+    without one) and a live ₹9 grant (402 without one). The grant is written
+    directly rather than bought through checkout, so a failure in these tests
+    means the HOLDINGS endpoint broke - `payments/tests/` owns the question of
+    how a grant is obtained and when it ends.
+    """
+    Payment.objects.create(
+        user=investor,
+        razorpay_order_id="order_TESTHOLDINGSEDIT",
+        razorpay_payment_id="pay_TESTHOLDINGSEDIT",
+        amount=900,
+        currency="INR",
+        status=PaymentStatus.PAID,
+        paid_at=timezone.now(),
+    )
+    client = APIClient()
+    client.force_authenticate(user=investor)
+    return client
 
 
 @pytest.fixture

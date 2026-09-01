@@ -24,6 +24,19 @@
  * back two reasons. Rendering only a count would throw away the half of that
  * answer the user has to act on, so the per-row table is the primary result
  * here and the counts are the summary above it.
+ *
+ * EDITING COSTS ₹9, AND THE OPEN/CLOSE TOGGLE IS THE ROUND
+ * --------------------------------------------------------
+ * This panel had an Open/Close button before payments existed, and that button
+ * turned out to BE the editing round - so the two were merged rather than
+ * stacked. Open is now "pay ₹9 and start editing"; Close is "I am done", which
+ * ends the round server-side and means the next one costs another ₹9. There is
+ * no third state where the panel is open but unpaid.
+ *
+ * The lock is a SCREEN, not a permission. Every write endpoint refuses an
+ * unpaid request with a 402 whatever this component renders - see
+ * payments/gating.py. What the locked state buys is a user who is told the
+ * price before they fill in a form, rather than after.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -35,6 +48,8 @@ import {
   addHolding,
   importHoldingsCsv,
 } from '../api/client'
+import { UNLOCK_PRICE_LABEL } from '../api/payments'
+import { useUnlock } from '../payments/unlock-context'
 
 /** How long a write may take before the label admits it is fetching prices. */
 const SLOW_WRITE_MS = 600
@@ -429,9 +444,10 @@ function ImportReport({ report }) {
    Shell
    --------------------------------------------------------------------------- */
 export default function ManageHoldings({ portfolioId, onChanged }) {
-  // Collapsed by default: the dashboard is for reading, and this is the one
-  // panel that changes what it says. Opening it is a deliberate act.
-  const [isOpen, setIsOpen] = useState(false)
+  // The open/closed state of this panel IS the editing round - it is not
+  // tracked separately here, because two booleans that must agree are one
+  // booleans' worth of truth and twice the ways to disagree.
+  const { isUnlocked, isPaying, error, unlock, lock } = useUnlock()
 
   return (
     <section className="panel manage">
@@ -439,20 +455,30 @@ export default function ManageHoldings({ portfolioId, onChanged }) {
         <div>
           <h2 className="panel__title">Manage holdings</h2>
           <p className="panel__subtitle">
-            Add a position by hand or import a CSV — every panel above recomputes
+            {isUnlocked
+              ? 'Editing is open — every panel above recomputes as you change things'
+              : `Add a position by hand or import a CSV — ${UNLOCK_PRICE_LABEL} per editing session`}
           </p>
         </div>
-        <button
-          type="button"
-          className="button button--small button--ghost"
-          onClick={() => setIsOpen((open) => !open)}
-          aria-expanded={isOpen}
-        >
-          {isOpen ? 'Close' : 'Open'}
-        </button>
+
+        {isUnlocked ? (
+          <button type="button" className="button button--small button--ghost" onClick={lock}>
+            Close
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="button button--small manage__unlock"
+            onClick={unlock}
+            disabled={isPaying}
+          >
+            {isPaying && <span className="spinner spinner--inline" aria-hidden="true" />}
+            {isPaying ? 'Opening checkout…' : `Unlock editing ${UNLOCK_PRICE_LABEL}`}
+          </button>
+        )}
       </div>
 
-      {isOpen && (
+      {isUnlocked ? (
         <div className="panel__body manage__body">
           <div className="manage__section">
             <h3 className="manage__heading">Add one</h3>
@@ -463,6 +489,33 @@ export default function ManageHoldings({ portfolioId, onChanged }) {
             <h3 className="manage__heading">Import a CSV</h3>
             <ImportForm portfolioId={portfolioId} onChanged={onChanged} />
           </div>
+
+          <p className="manage__round" role="status">
+            This round is paid for. Add and remove as much as you like — closing
+            this panel ends it, and the next round is another {UNLOCK_PRICE_LABEL}.
+          </p>
+        </div>
+      ) : (
+        <div className="panel__body manage__locked">
+          <p className="manage__locked-title">
+            <span aria-hidden="true">🔒</span> Editing is locked
+          </p>
+          <p className="manage__locked-body">
+            Viewing your dashboard is free. One payment of {UNLOCK_PRICE_LABEL} opens a
+            single editing session: add positions, import a CSV, and delete rows from the
+            holdings table below, as many as you need. Closing the panel — or reloading the
+            page — ends the session.
+          </p>
+          {/*
+            The failure lives here rather than in a toast: the button that
+            caused it is six pixels away, and a cancelled payment needs no
+            apology, only a way to try again.
+          */}
+          {error && (
+            <p className="banner banner--error manage__locked-error" role="alert">
+              {error.message}
+            </p>
+          )}
         </div>
       )}
     </section>

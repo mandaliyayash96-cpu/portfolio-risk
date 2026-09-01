@@ -419,15 +419,88 @@ and cannot be reached from the browser.
 
 ---
 
+## Paying to edit (₹9 per session)
+
+Viewing the dashboard is free. **Editing holdings is not**: adding a position,
+importing a CSV and deleting a row all require a paid unlock, bought through
+Razorpay in **test mode**.
+
+### What one ₹9 buys
+
+One *editing round*. It starts when the payment signature verifies and ends at
+whichever of these comes **first**:
+
+| # | Ends when | Triggered by |
+|---|-----------|--------------|
+| 1 | The user closes the Manage-holdings panel | the client (`POST /api/payments/finish/`) |
+| 2 | A new order is created — it retires whatever was outstanding | the client |
+| 3 | `EDITING_UNLOCK_TTL` (20 minutes) after payment | **nobody** — this is the backstop |
+
+A write does **not** consume the grant, so one round holds as many edits as you
+like. Condition 3 is what makes "one ₹9 cannot be reused forever" true no
+matter what the browser does; the other two depend on the client behaving.
+
+**Known gap, stated plainly:** between a reload and either condition 2 or 3 the
+grant is still live on the server. The UI locks itself, but someone who reloads
+and calls the API by hand could keep editing for the rest of those 20 minutes.
+Closing that completely means binding the grant to a nonce that dies with the
+page — which also charges ₹9 twice when a browser refreshes mid-round. The TTL
+was judged the better trade. `EDITING_UNLOCK_TTL_MINUTES` in the environment
+tightens it.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/payments/order/` | Creates a ₹9 order. Returns `{order_id, amount, currency, key_id}` — `key_id` is the **public** key the checkout widget needs. |
+| POST | `/api/payments/verify/` | Body: `razorpay_order_id`, `razorpay_payment_id`, `razorpay_signature`. Verifies the HMAC against the key secret and only then marks the payment paid. |
+| POST | `/api/payments/finish/` | Ends the round. Idempotent. |
+
+All three need the Firebase Bearer token from Part 1.
+
+The amount is a **server-side constant** (`EDITING_UNLOCK_AMOUNT_PAISE = 900`),
+never read from the request: an amount the client can name is an amount the
+client can set to zero.
+
+### What a locked write looks like
+
+```json
+{"success": false, "data": null,
+ "error": {"code": "payment_required",
+           "message": "Editing is locked. Unlock a round of edits for ₹9 to continue.",
+           "details": null}}
+```
+
+with HTTP **402**. A signed-out caller gets **401** instead — there is nobody
+for a payment to belong to.
+
+### Testing it
+
+Razorpay test mode never charges a real card. In the checkout sheet use card
+`4111 1111 1111 1111`, any future expiry, any CVV, and any name; for UPI, the
+test VPA `success@razorpay`. The `rzp_test_…` key in `backend/.env` is what
+keeps it in that mode — a live key would take real money with no other code
+change, so check the prefix before deploying.
+
+The suite proves the part that matters without a network: signature
+verification is a local HMAC, so `payments/tests/` computes a real signature
+with a test secret and lets the production verification code run against it.
+Only order creation — an HTTPS call — is mocked.
+
+---
+
 ## Tests
 
-No test needs Redis, a worker, the network, or a Firebase service account — the
-provider is stubbed through `settings.MARKET_DATA_PROVIDER`, the tasks are
-called as plain functions, and token verification is mocked at a single seam
-(`accounts.firebase.verify_token`).
+No test needs Redis, a worker, the network, a Firebase service account or a
+Razorpay account — the provider is stubbed through
+`settings.MARKET_DATA_PROVIDER`, the tasks are called as plain functions, token
+verification is mocked at a single seam (`accounts.firebase.verify_token`), and
+of the payments only order creation is mocked (signature verification is a
+local HMAC and runs for real).
 
 ```bash
 cd backend
 python -m pytest -q
 python -m pytest accounts -q      # just the auth work
+python -m pytest payments -q      # the ₹9 gate
 ```

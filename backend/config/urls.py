@@ -24,6 +24,10 @@ urlpatterns = [
     # Firebase confirms an OTP; /api/auth/me/ is the boot-time "who am I".
     # Neither takes an id - both address whoever holds the token.
     path("api/auth/", include("accounts.urls")),
+    # The ₹9 editing unlock: create an order, verify the signed callback, end
+    # the round. Nothing here is addressed by id either - a payment belongs to
+    # whoever holds the token.
+    path("api/payments/", include("payments.urls")),
     # TODO Phase 2: path("api/marketdata/", include("marketdata.urls"))
     # Holdings entry from the dashboard: add one by hand, bulk-load a CSV, or
     # delete a row. The portfolio LIST endpoint is still to come - these are

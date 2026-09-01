@@ -78,6 +78,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     "common",       # envelope, exception handler, abstract base models
     "accounts",     # phone identity (Firebase) -> AppUser -> their portfolio
+    "payments",     # Razorpay ₹9 editing unlocks
     "portfolio",    # Portfolio / Holding / Transaction
     "marketdata",   # PriceSnapshot / PriceHistory  (+ provider interface in Phase 2)
     "alerts",       # AlertRule / AlertEvent + evaluator, consumer, scan cmd
@@ -309,6 +310,31 @@ FIREBASE_CREDENTIALS = os.environ.get("FIREBASE_CREDENTIALS", "")
 # ---------------------------------------------------------------------------
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+
+# ---------------------------------------------------------------------------
+# The editing unlock — what ₹9 buys.
+#
+# PAISE, NOT RUPEES. Razorpay's API takes an integer number of the smallest
+# unit and its signature covers that integer, so 900 is the number that goes
+# over the wire and the number stored on Payment. See payments/models.py for
+# why this one figure is deliberately not a Decimal.
+#
+# The amount lives here rather than in the request body because an amount the
+# client sends is an amount the client can set to 1.
+# ---------------------------------------------------------------------------
+EDITING_UNLOCK_AMOUNT_PAISE = int(os.environ.get("EDITING_UNLOCK_AMOUNT_PAISE", "900"))
+EDITING_UNLOCK_CURRENCY = os.environ.get("EDITING_UNLOCK_CURRENCY", "INR")
+
+#: How long one paid editing round may stay open.
+#:
+#: The other two ways a round ends - the user closes the panel, or starts a new
+#: order - are both triggered by the CLIENT. This one is not, which is what
+#: makes "one ₹9 cannot be reused forever" true whatever the browser does. Long
+#: enough to paste a CSV and fix two typos; short enough that a tab left open
+#: overnight is not a standing licence. See payments/services.py.
+EDITING_UNLOCK_TTL = timedelta(
+    minutes=int(os.environ.get("EDITING_UNLOCK_TTL_MINUTES", "20"))
+)
 
 # ---------------------------------------------------------------------------
 # Channels - the transport under the live alert feed.

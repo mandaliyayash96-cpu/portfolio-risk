@@ -53,8 +53,12 @@ reportlab==5.0.1
 firebase-admin==7.5.0
 python-dotenv==1.2.3
 
-# Part 2 — payments. Not installed yet.
-# razorpay==1.*
+# Part 3 — payments.
+# The ₹9 editing unlock. Imported ONLY by payments/gateway.py, the same
+# containment rule firebase-admin and yfinance live under. Order creation is an
+# HTTPS call; signature verification is a local HMAC, which is what lets the
+# test suite exercise the real check with no network.
+razorpay==2.0.1
 
 # Phase 7 — React dev server talks to this API cross-origin.
 # django-cors-headers==4.*

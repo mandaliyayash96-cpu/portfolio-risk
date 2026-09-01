@@ -1737,3 +1737,63 @@ code {
   border-radius: 999px;
   white-space: nowrap;
 }
+
+/* ---------------------------------------------------------------------------
+   The editing gate
+
+   Two states of the Manage-holdings panel: locked (what everyone sees first)
+   and unlocked (a paid round, in progress).
+
+   Every value is a token, so dark mode needs nothing here - which is the point
+   of the rule at the top of this file. The locked card leans on
+   --surface-sunken rather than a grey, so it reads as inset in both themes
+   instead of glowing in one of them.
+   --------------------------------------------------------------------------- */
+.manage__locked {
+  padding: 22px 24px 24px;
+  background: var(--surface-sunken);
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+
+.manage__locked-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.manage__locked-body {
+  max-width: 62ch;
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+.manage__locked-error {
+  margin-top: 16px;
+  font-size: 13.5px;
+}
+
+/* The one filled button on a panel that is otherwise all ghosts: it is the
+   only thing on this card the user can do, and the price is in the label. */
+.manage__unlock {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* The standing reminder inside an open round, so "closing this ends it" is on
+   screen at the moment the Close button is. Green because a paid round is a
+   good state to be in, not a warning. */
+.manage__round {
+  margin-top: 4px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--good);
+  background: var(--good-wash);
+  border: 1px solid var(--good-border);
+  border-radius: 8px;
+}

@@ -17,11 +17,17 @@
  * The dashboard itself moved to Dashboard.jsx unchanged, except that the
  * hardcoded `PORTFOLIO_ID = 1` became a prop. This file is the only thing in
  * the app that decides whose data is on screen.
+ *
+ * <UnlockProvider> wraps the dashboard rather than living inside it, because
+ * the holdings panel is mounted in two different branches of Dashboard and the
+ * paid editing round has to survive moving between them. See the note at the
+ * top of payments/UnlockProvider.jsx.
  */
 
 import { useAuth } from './auth/auth-context'
 import LoginScreen from './auth/LoginScreen'
 import Dashboard from './Dashboard'
+import { UnlockProvider } from './payments/UnlockProvider'
 
 export default function App() {
   const { isLoading, firebaseUser, session, sessionError, portfolioId, retrySession, logout } =
@@ -67,5 +73,9 @@ export default function App() {
     )
   }
 
-  return <Dashboard portfolioId={portfolioId} />
+  return (
+    <UnlockProvider>
+      <Dashboard portfolioId={portfolioId} />
+    </UnlockProvider>
+  )
 }

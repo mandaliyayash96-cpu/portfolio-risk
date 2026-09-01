@@ -14,12 +14,26 @@ in a shape the dashboard has not already been taught to render.
 
 WHOSE PORTFOLIO IS BEING WRITTEN
 --------------------------------
-Each view runs the URL's id through `accounts.selectors.resolve_portfolio_id`
-first: a request carrying a verified Firebase token writes to its OWN
-portfolio whatever id it typed, and an anonymous one still addresses the id in
-the URL so portfolio 1 stays testable. The delete route resolves the portfolio
-id BEFORE it is used to scope the holding lookup, so a signed-in caller cannot
-delete out of a portfolio that is not theirs even by guessing both ids.
+Each view runs the URL's id through `accounts.selectors.resolve_portfolio_id`,
+which returns the caller's OWN portfolio whatever id they typed. The delete
+route resolves it BEFORE it is used to scope the holding lookup, so a caller
+cannot delete out of a portfolio that is not theirs even by guessing both ids.
+
+EDITING IS PAID; READING IS FREE
+--------------------------------
+All three endpoints below WRITE, and every one of them calls
+`payments.gating.require_editing_unlock` first. Editing holdings costs ₹9 for a
+round of changes, so a request without a live unlock is refused with 402
+{"code": "payment_required"} - and one without a signed-in user with 401,
+because a grant belongs to an account.
+
+Reading is untouched. The risk report, the charts, the holdings GET below and
+the PDF are all still open, which is deliberate: the dashboard has to be worth
+looking at before anyone will pay to change it.
+
+The gate does NOT consume the unlock - a round holds as many edits as the user
+wants, which is the difference between charging per round and charging per
+edit. `payments/services.py` documents when a round ends.
 """
 
 from rest_framework.decorators import api_view, parser_classes, permission_classes
@@ -28,17 +42,21 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from accounts.selectors import resolve_portfolio_id
+from payments.gating import require_editing_unlock
 from portfolio.selectors import list_holdings
 from portfolio.services import add_holding, delete_holding, import_holdings_csv
 
 
 @api_view(["GET", "POST"])
-# Same posture as /api/risk/ - open so the dashboard works before the login
-# screen exists. An authenticated caller is already pinned to their own
-# portfolio; an anonymous one can still write to any id, and this route WRITES,
-# so it is the most urgent of the three to close.
-# TODO Part 3 (enforce auth): IsAuthenticated here, and drop the URL-id
-#      fallback in accounts.selectors.resolve_portfolio_id.
+# AllowAny is the ROUTE's permission, not the method's: GET is free and POST is
+# gated inside the view, because one URL serves both and DRF's permission
+# classes cannot tell them apart. The gate is the first thing the POST branch
+# does - see require_editing_unlock below.
+#
+# TODO (reads): the GET here, and /api/risk/ and friends, are still open to an
+#      anonymous caller who names a portfolio id. Closing that is a separate
+#      decision from the payment gate - it costs the "curl portfolio 1" demo
+#      path - so it is left explicit rather than done quietly here.
 @permission_classes([AllowAny])
 def holdings(request, portfolio_id: int):
     """
@@ -59,7 +77,16 @@ def holdings(request, portfolio_id: int):
 
     GET is here because the risk report's holdings block describes a valuation
     and carries no row ids; the dashboard needs those for the delete button.
+
+    GET is free. POST costs ₹9 for the editing round it belongs to, and answers
+    402 {"code": "payment_required"} without one.
     """
+    if request.method == "POST":
+        # Before resolve_portfolio_id, so an unpaid caller is told the honest
+        # thing - editing is locked - rather than 404 for a portfolio the gate
+        # was never going to let them touch anyway.
+        require_editing_unlock(request)
+
     portfolio_id = resolve_portfolio_id(request, portfolio_id)
 
     if request.method == "POST":
@@ -100,7 +127,12 @@ def holdings_import(request, portfolio_id: int):
     outcome and the caller needs to see which half was which. The upload is
     rejected outright (400) only for problems no row survives: not a CSV, over
     1 MB, over 500 rows, or missing a required column.
+
+    Costs ₹9 for the editing round, like every other write here. A 500-row
+    import and a single add are the same one unlock - the price is per round,
+    not per position.
     """
+    require_editing_unlock(request)
     return Response(
         import_holdings_csv(resolve_portfolio_id(request, portfolio_id), request.FILES.get("file"))
     )
@@ -118,8 +150,10 @@ def holding_detail(request, portfolio_id: int, holding_id: int):
     may hold it, and re-adding it should not need the network again.
 
     404s on a holding that does not exist or belongs elsewhere; there is no
-    difference between those two answers on purpose.
+    difference between those two answers on purpose - and 402s before either,
+    because deleting a position is editing and editing is paid for.
     """
+    require_editing_unlock(request)
     return Response(
         delete_holding(holding_id, portfolio_id=resolve_portfolio_id(request, portfolio_id))
     )

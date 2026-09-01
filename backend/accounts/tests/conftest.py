@@ -111,6 +111,36 @@ def other_investors_portfolio(db) -> Portfolio:
 
 
 @pytest.fixture
+def paid_unlock(db):
+    """
+    A live ₹9 editing grant for the signed-in investor.
+
+    Holdings WRITES have been payment-gated since Part 3, so a scoping test
+    that does not grant one stops at a 402 and never reaches the code it means
+    to exercise. The row is written directly - `payments/tests/` owns how a
+    grant is actually bought.
+    """
+
+    def _make(phone: str = PHONE):
+        from django.utils import timezone
+
+        from accounts.services import resolve_app_user
+        from payments.models import Payment, PaymentStatus
+
+        return Payment.objects.create(
+            user=resolve_app_user(phone).user,
+            razorpay_order_id=f"order_SCOPING{Payment.objects.count():04d}",
+            razorpay_payment_id="pay_SCOPING",
+            amount=900,
+            currency="INR",
+            status=PaymentStatus.PAID,
+            paid_at=timezone.now(),
+        )
+
+    return _make
+
+
+@pytest.fixture
 def counts():
     """Row counts, for the assertions about not creating duplicates."""
 

@@ -24,6 +24,12 @@
  * so no panel is ever describing a portfolio that no longer exists. Its own
  * failures stay inside it; a rejected CSV cannot touch the numbers on screen.
  *
+ * The delete buttons in <HoldingsTable> are wired the same way the panel is
+ * gated: `onDelete` is passed only while the editing round is paid for, and
+ * HoldingsTable already renders read-only when it has no handler. So one
+ * boolean hides the whole column, with no lock-aware code in that component at
+ * all - and the backend refuses an unpaid delete regardless.
+ *
  * <AlertsPanel> is deliberately wired with nothing but the portfolio id. It owns
  * its own WebSocket, its own rules and its own errors, and shares no state with
  * the report above it - so an alert feed that cannot connect, or a Redis that is
@@ -40,6 +46,7 @@ import {
   getRiskReport,
   listHoldings,
 } from './api/client'
+import { useUnlock } from './payments/unlock-context'
 import AlertsPanel from './components/AlertsPanel'
 import AllocationPie from './components/AllocationPie'
 import CorrelationHeatmap from './components/CorrelationHeatmap'
@@ -57,6 +64,9 @@ import VarChart from './components/VarChart'
 const POLL_INTERVAL_MS = 30_000
 
 export default function Dashboard({ portfolioId }) {
+  // Only used to decide whether the holdings table offers its delete buttons -
+  // the panel itself reads the same context directly.
+  const { isUnlocked } = useUnlock()
   const [report, setReport] = useState(null)
   const [error, setError] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -290,7 +300,8 @@ export default function Dashboard({ portfolioId }) {
           holdings={report.portfolio?.holdings}
           marketValue={report.portfolio?.market_value}
           holdingIds={holdingIds}
-          onDelete={removeHolding}
+          // Absent while locked, which is what makes the column disappear.
+          onDelete={isUnlocked ? removeHolding : undefined}
         />
         <CorrelationHeatmap matrix={report.correlation_matrix} />
       </div>
