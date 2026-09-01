@@ -10,6 +10,15 @@ every DomainError the service raises, so all four failure modes
 (not_found / empty_portfolio / missing_price_data / insufficient_history)
 arrive as {"success": false, "data": null, "error": {...}} with the right
 status code, never as a 500.
+
+WHOSE PORTFOLIO IS BEING READ
+-----------------------------
+Every view here now runs the id from the URL through
+`accounts.selectors.resolve_portfolio_id`, which returns the CALLER'S OWN
+portfolio when the request carries a verified Firebase token and the URL's id
+otherwise. So a signed-in investor gets their own numbers whatever they type,
+and the anonymous portfolio-1 curl that the rest of the build is tested against
+still works. See that function for the Part 3 TODO that closes the second half.
 """
 
 from django.http import HttpResponse, JsonResponse
@@ -19,6 +28,7 @@ from rest_framework.decorators import api_view, permission_classes, renderer_cla
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from accounts.selectors import resolve_portfolio_id
 from common.exceptions import DomainError
 from common.renderers import EnvelopeJSONRenderer, PDFRenderer
 from common.response import envelope, error_payload
@@ -27,10 +37,12 @@ from risk.services import compute_performance, compute_rebalance, compute_risk
 
 
 @api_view(["GET"])
-# Hackathon MVP: open so the report is testable in a browser. The portfolio is
-# somebody's actual position, so this cannot ship open.
-# TODO Phase 4 (auth): IsAuthenticated, and scope the lookup to request.user in
-#      portfolio.selectors.get_portfolio so ids cannot be enumerated.
+# Still open, so the report stays testable in a browser while the login screen
+# is being built. An AUTHENTICATED request is already scoped to its own
+# portfolio by resolve_portfolio_id below; an anonymous one can still name any
+# id, which is why this cannot ship as it stands.
+# TODO Part 3 (enforce auth): IsAuthenticated here, and drop the URL-id
+#      fallback in accounts.selectors.resolve_portfolio_id.
 @permission_classes([AllowAny])
 def risk_report(request, portfolio_id: int):
     """
@@ -45,11 +57,11 @@ def risk_report(request, portfolio_id: int):
     Prices come from whatever `manage.py fetch_prices` last stored; this
     endpoint never calls the market data provider itself.
     """
-    return Response(compute_risk(portfolio_id))
+    return Response(compute_risk(resolve_portfolio_id(request, portfolio_id)))
 
 
 @api_view(["GET"])
-# Same posture as the risk report above; the same TODO applies.
+# Same posture as the risk report above; the same Part 3 TODO applies.
 @permission_classes([AllowAny])
 def rebalance_report(request, portfolio_id: int):
     """
@@ -62,11 +74,11 @@ def rebalance_report(request, portfolio_id: int):
     Computed from the same prepared inputs as /api/risk/, so the "current"
     figures here match that report exactly.
     """
-    return Response(compute_rebalance(portfolio_id))
+    return Response(compute_rebalance(resolve_portfolio_id(request, portfolio_id)))
 
 
 @api_view(["GET"])
-# Same posture as the two reports above; the same TODO applies.
+# Same posture as the two reports above; the same Part 3 TODO applies.
 @permission_classes([AllowAny])
 def performance_report(request, portfolio_id: int):
     """
@@ -80,13 +92,13 @@ def performance_report(request, portfolio_id: int):
     is the identical number that report shows and the last point of the curve
     is the same day.
     """
-    return Response(compute_performance(portfolio_id))
+    return Response(compute_performance(resolve_portfolio_id(request, portfolio_id)))
 
 
 @api_view(["GET"])
-# Same posture as the three reports above; the same TODO applies. This one
-# leaks the portfolio NAME into a filename as well as its numbers into a file,
-# which is one more reason it cannot ship open.
+# Same posture as the three reports above; the same Part 3 TODO applies. This
+# one leaks the portfolio NAME into a filename as well as its numbers into a
+# file, which is one more reason it cannot ship open.
 @permission_classes([AllowAny])
 # EnvelopeJSONRenderer first, so */* and application/json both negotiate to it.
 # PDFRenderer is here only so a client that asks for application/pdf - the media
@@ -122,7 +134,7 @@ def risk_report_pdf(request, portfolio_id: int):
     envelope. Only the four EXPECTED data failures are handled below.
     """
     try:
-        report = compute_risk(portfolio_id)
+        report = compute_risk(resolve_portfolio_id(request, portfolio_id))
     except DomainError as exc:
         # not_found (404) / empty_portfolio (400) / missing_price_data (422) /
         # insufficient_history (422) - the same four the JSON endpoint raises.

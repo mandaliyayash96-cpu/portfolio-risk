@@ -299,12 +299,76 @@ and the dashboard keeps showing them with their `last close` tag.
 
 ---
 
+## Phone authentication (backend, Part 1)
+
+The browser owns the OTP flow: Firebase sends the SMS, the user types the code,
+Firebase mints an **ID token**. This backend's only job is to *verify* that
+token and map the phone number inside it to a user and their own portfolio. The
+login UI does not exist yet — that is Part 2.
+
+### Configuration
+
+`backend/.env` (gitignored, never committed):
+
+```
+FIREBASE_CREDENTIALS=<service-account-file>.json   # sits in backend/, also gitignored
+RAZORPAY_KEY_ID=...                                # loaded now, used in Part 2
+RAZORPAY_KEY_SECRET=...                            # never leaves the server
+```
+
+`config/settings.py` loads this with python-dotenv **before** it reads anything
+from the environment, and a real environment variable still wins over the file.
+The service account is read once at startup by `accounts/apps.py`; the log line
+`Firebase initialised from <file>` is the confirmation. Without the file the
+process still boots — everything except `/api/auth/` works, and `/api/auth/`
+answers `503 firebase_unavailable` rather than pretending the token was bad.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/auth/session/` | Called the instant the OTP succeeds. Creates the user + their portfolio on a first login, returns `{user_id, phone, portfolio_id, first_login}`. |
+| GET | `/api/auth/me/` | Boot-time "who am I". Pure read. |
+
+Both take `Authorization: Bearer <firebase_id_token>` and **nothing else** — a
+phone number in the body or a header is ignored. Only the number inside the
+verified token is trusted.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/auth/session/      -H "Authorization: Bearer $ID_TOKEN"
+curl http://127.0.0.1:8000/api/auth/me/      -H "Authorization: Bearer $ID_TOKEN"
+```
+
+No token → `401 not_authenticated`. Expired → `401 token_expired` (distinct
+from `invalid_token`, so the dashboard can tell "sign in again" from "your
+client is broken"). All of them arrive in the usual envelope.
+
+Until the login screen exists there is no way to obtain `$ID_TOKEN` from this
+repository — it comes from the Firebase JS SDK in the browser. The suite
+therefore mocks the one verification call and asserts everything downstream of
+it (`backend/accounts/tests/`).
+
+### What this changes for the existing endpoints
+
+`/api/risk/`, `/api/rebalance/`, `/api/performance/` and the holdings routes
+now read **the caller's own portfolio** when the request carries a valid token,
+whatever id the URL names. With no token they behave exactly as before, so
+every `portfolio/1/` command in this file still works.
+
+That fallback is deliberate and temporary — see the `TODO Part 3` markers in
+`accounts/selectors.py` and each view.
+
+---
+
 ## Tests
 
-No test needs Redis, a worker, or the network — the provider is stubbed through
-`settings.MARKET_DATA_PROVIDER` and the tasks are called as plain functions.
+No test needs Redis, a worker, the network, or a Firebase service account — the
+provider is stubbed through `settings.MARKET_DATA_PROVIDER`, the tasks are
+called as plain functions, and token verification is mocked at a single seam
+(`accounts.firebase.verify_token`).
 
 ```bash
 cd backend
 python -m pytest -q
+python -m pytest accounts -q      # just the auth work
 ```

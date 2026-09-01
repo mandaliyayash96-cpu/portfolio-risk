@@ -12,8 +12,24 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # backend/  (manage.py lives here)
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# ---------------------------------------------------------------------------
+# Secrets — backend/.env, which is gitignored and never committed.
+#
+# Loaded HERE, before the first os.environ.get() below, because everything in
+# this file reads the environment at import time. load_dotenv does NOT override
+# variables that are already set, so a real environment (a container, a CI
+# runner, a systemd unit) still wins over the developer's file.
+#
+# Nothing in this project logs a secret. The Firebase service-account JSON and
+# both Razorpay keys are read into settings and passed to their SDKs; the only
+# thing that ever reaches a log line is the credentials PATH.
+# ---------------------------------------------------------------------------
+load_dotenv(BASE_DIR / ".env")
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +77,7 @@ THIRD_PARTY_APPS = [
 
 LOCAL_APPS = [
     "common",       # envelope, exception handler, abstract base models
+    "accounts",     # phone identity (Firebase) -> AppUser -> their portfolio
     "portfolio",    # Portfolio / Holding / Transaction
     "marketdata",   # PriceSnapshot / PriceHistory  (+ provider interface in Phase 2)
     "alerts",       # AlertRule / AlertEvent + evaluator, consumer, scan cmd
@@ -138,11 +155,25 @@ REST_FRAMEWORK = {
         else ["common.renderers.EnvelopeJSONRenderer"]
     ),
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        # FIRST, for two reasons. It is the scheme the SPA actually uses, and
+        # DRF asks the FIRST authenticator in this list for the
+        # WWW-Authenticate challenge - which is what makes a rejected token a
+        # 401 rather than DRF's silent downgrade to 403.
+        #
+        # It DECLINES (returns None) when there is no Bearer header, so every
+        # AllowAny endpoint still serves anonymous callers exactly as before;
+        # adding it here changes nothing until a request carries a token.
+        "accounts.authentication.FirebaseAuthentication",
+        # Kept for /admin and the browsable API. Ordered second so an admin
+        # session never shadows a Bearer token.
         "rest_framework.authentication.SessionAuthentication",
-        # TODO Phase 4: add TokenAuthentication / JWT for the React client.
     ],
-    # Hackathon MVP: open so Phases 2-4 are testable with curl/Postman.
-    # TODO Phase 4: flip to IsAuthenticated and scope every queryset by request.user.
+    # Hackathon MVP: open so Phases 2-4 are testable with curl/Postman. The
+    # auth endpoints set their own permission (accounts.permissions.IsAppUser),
+    # so this default does not reach them.
+    # TODO Part 3: flip to IsAuthenticated and drop the URL-id fallback in
+    # accounts.selectors.resolve_portfolio_id, which is the last thing letting
+    # an anonymous caller read a portfolio by guessing its id.
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     "DEFAULT_PAGINATION_CLASS": None,  # TODO Phase 4: paginate transaction history
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
@@ -250,6 +281,34 @@ MARKET_DATA_PROVIDER = os.environ.get(
 DEFAULT_BASE_CURRENCY = "INR"
 TRADING_DAYS_PER_YEAR = 252
 RISK_FREE_RATE = 0.065  # annualised; ~India 10Y G-Sec. TODO Phase 3: make configurable.
+
+
+# ---------------------------------------------------------------------------
+# Firebase — phone authentication.
+#
+# The browser owns the OTP flow entirely (Firebase sends the SMS and mints an
+# ID token); this backend's only job is to VERIFY that token, which is what the
+# service account below is for. It is read once at startup by
+# accounts/apps.py -> accounts.firebase.init_firebase().
+#
+# The value in .env is a bare filename resolved against BASE_DIR, so the file
+# lives beside manage.py and is matched by .gitignore's *firebase-adminsdk*.json
+# rule. An empty or missing value is not fatal: the process boots, logs a
+# warning, and the auth endpoints answer 503 while everything else works.
+# ---------------------------------------------------------------------------
+FIREBASE_CREDENTIALS = os.environ.get("FIREBASE_CREDENTIALS", "")
+
+# ---------------------------------------------------------------------------
+# Razorpay — loaded now, used in Part 2 (subscription/checkout).
+#
+# The SECRET signs and verifies payment callbacks and must never leave the
+# server: it is not exposed through any endpoint, never rendered into a
+# template, and never logged. The KEY_ID is public by design (the browser
+# checkout widget needs it) but is still read from the environment so the two
+# stay together and neither is ever typed into source.
+# ---------------------------------------------------------------------------
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 
 # ---------------------------------------------------------------------------
 # Channels - the transport under the live alert feed.

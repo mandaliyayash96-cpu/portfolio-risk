@@ -44,6 +44,18 @@ celery==5.6.3
 # glyph — risk/report_pdf.py explains what that means for money formatting.
 reportlab==5.0.1
 
+# Auth Part 1 — phone sign-in.
+# firebase-admin verifies the ID token the browser gets after the OTP; it is
+# imported ONLY by accounts/firebase.py, the same containment rule yfinance
+# lives under. python-dotenv loads backend/.env in config/settings.py, which is
+# where FIREBASE_CREDENTIALS and the (Part 2) Razorpay keys come from — no
+# secret is ever typed into source.
+firebase-admin==7.5.0
+python-dotenv==1.2.3
+
+# Part 2 — payments. Not installed yet.
+# razorpay==1.*
+
 # Phase 7 — React dev server talks to this API cross-origin.
 # django-cors-headers==4.*
 
