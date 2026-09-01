@@ -299,7 +299,7 @@ and the dashboard keeps showing them with their `last close` tag.
 
 ---
 
-## Phone authentication (backend, Part 1)
+## Phone authentication
 
 The browser owns the OTP flow: Firebase sends the SMS, the user types the code,
 Firebase mints an **ID token**. This backend's only job is to *verify* that
@@ -343,10 +343,11 @@ No token → `401 not_authenticated`. Expired → `401 token_expired` (distinct
 from `invalid_token`, so the dashboard can tell "sign in again" from "your
 client is broken"). All of them arrive in the usual envelope.
 
-Until the login screen exists there is no way to obtain `$ID_TOKEN` from this
-repository — it comes from the Firebase JS SDK in the browser. The suite
-therefore mocks the one verification call and asserts everything downstream of
-it (`backend/accounts/tests/`).
+The dashboard obtains `$ID_TOKEN` for you — see *Signing in from the dashboard*
+below. To exercise the API by hand, copy a token out of the browser console
+(`await firebase.auth().currentUser.getIdToken()` equivalents), or rely on the
+test suite, which mocks the one verification call and asserts everything
+downstream of it (`backend/accounts/tests/`).
 
 ### What this changes for the existing endpoints
 
@@ -357,6 +358,64 @@ every `portfolio/1/` command in this file still works.
 
 That fallback is deliberate and temporary — see the `TODO Part 3` markers in
 `accounts/selectors.py` and each view.
+
+---
+
+## Signing in from the dashboard
+
+The Vite app now opens on a phone sign-in screen and only shows the dashboard
+once you are signed in. A returning user with a live Firebase session skips
+straight through — no second OTP.
+
+### Open it at `localhost`, not `127.0.0.1`
+
+```
+http://localhost:5173      ✅
+http://127.0.0.1:5173      ❌  auth/unauthorized-domain
+```
+
+Firebase authorises `localhost` for every project by default; `127.0.0.1` is a
+different host string and is not on that list. The login screen names this
+error if you hit it, but it is easier to avoid. (The API is still reached at
+`127.0.0.1:8000` — that is a different origin and CORS already allows it.)
+
+### Firebase console, once per project
+
+1. **Authentication → Sign-in method → Phone**: enable it. Without this every
+   "Send OTP" fails with `auth/operation-not-allowed`.
+2. **Authentication → Settings → Authorized domains**: `localhost` is there by
+   default. Add your deployed domain when there is one.
+3. **Test numbers** (optional, and the fastest way to demo): under Phone →
+   *Phone numbers for testing*, add a number and a fixed six-digit code. That
+   pair signs in with no SMS, no charge and no rate limit — the backend still
+   receives a real, verifiable ID token.
+
+### What the screen does
+
+| Step | What happens |
+|------|--------------|
+| Phone | `signInWithPhoneNumber` with an **invisible reCAPTCHA**. No puzzle appears; the widget still has to exist, which is why the container div is always mounted. |
+| Code | `confirm(code)` signs you into Firebase. |
+| Then | `POST /api/auth/session/` with the fresh ID token; the returned `portfolio_id` is what every panel on the dashboard reads. |
+
+The header shows the signed-in number and a **Log out** button. The theme
+toggle works on the login screen too.
+
+### If "Send OTP" does nothing the second time
+
+That is the classic reCAPTCHA symptom: the token is single-use. This app
+clears and rebuilds the verifier after **every** attempt (see the comment at
+the top of `src/auth/LoginScreen.jsx`), so if you see it, the cause is
+elsewhere — check the browser console for the `auth/…` code and match it
+against `src/auth/firebase-errors.js`.
+
+### Where the config lives
+
+`src/firebase.js`, in the source, on purpose. The `apiKey` there identifies the
+project and authorises nothing: sign-in still needs a real OTP from an
+authorised domain, and the backend verifies every token server-side before it
+reads a row. The real secret — the service-account JSON — is in `backend/.env`
+and cannot be reached from the browser.
 
 ---
 

@@ -1505,3 +1505,235 @@ code {
   color: var(--bad);
   text-align: right;
 }
+
+/* ---------------------------------------------------------------------------
+   Sign-in
+
+   The first screen anyone sees, and the only one a signed-out visitor sees at
+   all. Two rules it inherits from the rest of this file and cannot break:
+
+     * not one literal colour. Every value below is a token, which is the whole
+       of what makes this screen work in dark mode - there is no second block
+       here, and there must never need to be.
+     * the same controls as the dashboard. `.button`, `.spinner` and `.banner`
+       are reused rather than restyled, so a change to any of them reaches the
+       login screen too.
+
+   The card is narrower than `.status` (400px against 560) because it holds a
+   single input. A phone number in a 560px box reads as a form somebody forgot
+   to finish.
+   --------------------------------------------------------------------------- */
+.login {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  padding: 36px 36px 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* The theme toggle, top-right of the card. Absolute rather than in the flow so
+   it cannot push the title off-centre at a narrow width. */
+.login__toolbar {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
+.login__eyebrow {
+  /* Room for the toggle above it, so the two never collide on a short card. */
+  margin-right: 96px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  line-height: 1.5;
+}
+
+.login__title {
+  margin-top: 10px;
+  font-size: 27px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.login__subtitle {
+  margin-top: 8px;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+.login__form {
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.login__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.login__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+}
+
+.login__input {
+  width: 100%;
+  padding: 11px 13px;
+  font-size: 16px;
+  font-family: inherit;
+  /* Tabular figures so a phone number does not re-space itself as it is typed. */
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.login__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.login__input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+
+.login__input:disabled {
+  opacity: 0.65;
+}
+
+/* The six digits. Wide tracking and a mono face so a mistyped code is visible
+   at a glance rather than something you have to count. */
+.login__input--code {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  letter-spacing: 0.4em;
+  text-align: center;
+}
+
+.login__submit {
+  /* inline-flex so the inline spinner sits on the text baseline; full width
+     because it is the only action on the card. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+  margin-top: 14px;
+}
+
+.login__links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+/* A real <button> styled as a link: these ACT (they clear state and re-send an
+   SMS), so an <a href="#"> would be a lie to a screen reader and a broken
+   middle-click to everyone else. */
+.login__link {
+  padding: 2px 4px;
+  font-size: 13.5px;
+  font-family: inherit;
+  color: var(--accent);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.login__link:hover:not(:disabled) {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.login__link:disabled {
+  color: var(--ink-muted);
+  cursor: not-allowed;
+}
+
+.login__link-sep {
+  width: 1px;
+  height: 13px;
+  background: var(--border);
+}
+
+.login__banner {
+  margin-top: 16px;
+  font-size: 13.5px;
+}
+
+/*
+  Firebase's invisible reCAPTCHA container.
+
+  It is in the DOM on both steps and renders nothing when invisible - but it is
+  NOT display:none. Hiding it that way can make the widget fail to initialise,
+  and on the rare fallback to a visible challenge there would be nowhere for it
+  to appear. Zero height and empty is the state it should normally sit in;
+  `:not(:empty)` gives it its room back if Firebase ever puts something there.
+*/
+.login__recaptcha:not(:empty) {
+  margin-top: 16px;
+}
+
+.login__foot {
+  margin-top: 20px;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--ink-muted);
+}
+
+/* Two buttons side by side on the status card - the signed-in-but-no-session
+   screen offers Retry and Sign out, and .button's own margin-top would stack
+   them awkwardly against the text above. */
+.status__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/* ---------------------------------------------------------------------------
+   Signed-in identity, in the dashboard header
+
+   Sits on the row that already holds the theme toggle rather than above the
+   market value: the number and the way out are chrome, and the amount is the
+   thing the eye should land on in that corner.
+   --------------------------------------------------------------------------- */
+.header__account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.header__phone {
+  padding: 5px 11px;
+  font-size: 13px;
+  font-weight: 600;
+  /* Tabular, like every other number on this page. */
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  white-space: nowrap;
+}

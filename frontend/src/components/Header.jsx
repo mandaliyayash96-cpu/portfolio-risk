@@ -16,17 +16,24 @@
  * portfolio, the same window, the same numbers. Its failures stay local: a
  * report that cannot be generated shows a line of red text under the button and
  * leaves every panel on the page untouched.
+ *
+ * The signed-in number and the way out are read from context rather than passed
+ * down. Identity is not the dashboard's business - it does not own it, cannot
+ * change it, and would only be forwarding two props it never reads. The header
+ * is the one place that renders them, so it is the one place that asks.
  */
 
 import { useState } from 'react'
 
 import { ApiError, downloadRiskReportPdf, saveBlob } from '../api/client'
+import { useAuth } from '../auth/auth-context'
 import { isoDate, clockTime, money } from '../format'
 import ThemeToggle from './ThemeToggle'
 
 export default function Header({ report, lastUpdated, isRefreshing, portfolioId }) {
   const portfolio = report?.portfolio
   const benchmark = report?.benchmark
+  const { phone, logout } = useAuth()
 
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState(null)
@@ -82,7 +89,19 @@ export default function Header({ report, lastUpdated, isRefreshing, portfolioId 
       </div>
 
       <div className="header__aside">
-        <ThemeToggle />
+        <div className="header__account">
+          {phone && (
+            <span className="header__phone" title="Signed in">
+              {phone}
+            </span>
+          )}
+          <ThemeToggle />
+          {phone && (
+            <button type="button" className="button button--small button--ghost" onClick={logout}>
+              Log out
+            </button>
+          )}
+        </div>
 
         <div className="header__value">
           <p className="header__value-label">Market value</p>

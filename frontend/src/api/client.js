@@ -6,9 +6,17 @@
  * that wrapper: this module unwraps `data` on success and raises an ApiError
  * carrying the backend's own message on failure, so the UI has exactly one
  * thing to render when something goes wrong.
+ *
+ * It is also the only place that knows requests are AUTHENTICATED. The two
+ * interceptors below attach the signed-in user's Firebase ID token and handle
+ * it expiring, so not one caller in the app - and not one component - has to
+ * think about tokens. A signed-out visitor sends no header at all, and the
+ * backend answers exactly as it did before phone auth existed.
  */
 
 import axios from 'axios'
+
+import { auth } from '../firebase'
 
 // TODO Phase 8 (prod): read from import.meta.env.VITE_API_BASE_URL so the
 // deployed build can point at the real host instead of a dev port.
@@ -30,6 +38,72 @@ const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000, // the Monte Carlo leg of the report is not instant
   headers: { Accept: 'application/json' },
+})
+
+/* ---------------------------------------------------------------------------
+   Authentication
+
+   Two interceptors, and between them the rest of this file - and every
+   component above it - never mentions a token.
+   --------------------------------------------------------------------------- */
+
+/**
+ * Attach the signed-in user's ID token to every request.
+ *
+ * `getIdToken()` is the important call here, rather than a token held in a
+ * variable somewhere: Firebase caches the current token and silently mints a
+ * fresh one when it is within five minutes of expiring, so a tab left open
+ * over lunch keeps working with no refresh logic of our own.
+ *
+ * No user means no header. That is what keeps the dashboard's anonymous
+ * behaviour identical to before auth existed, and it is why this cannot be
+ * written as "throw if not signed in".
+ */
+api.interceptors.request.use(async (config) => {
+  const user = auth.currentUser
+  if (!user) return config
+
+  try {
+    config.headers.Authorization = `Bearer ${await user.getIdToken()}`
+  } catch {
+    // The refresh failed - revoked account, or offline. Sending the request
+    // unauthenticated gets a clean 401 the UI already knows how to show;
+    // throwing here would surface as an unexplained network error instead.
+  }
+  return config
+})
+
+/**
+ * One retry with a force-refreshed token when the backend says 401.
+ *
+ * The request interceptor above handles ordinary expiry, so reaching here means
+ * the two sides disagree: a token Firebase still considered valid was rejected
+ * server-side (clock skew, or a token revoked mid-session). `getIdToken(true)`
+ * bypasses the cache and asks Google for a new one.
+ *
+ * The `_retriedWithFreshToken` flag is not optional. Without it a genuinely
+ * unauthorised call - a revoked user, a disabled account - retries forever,
+ * each attempt minting a token and each being refused.
+ *
+ * Status only, never the envelope's error code: this instance also fetches the
+ * PDF with `responseType: 'blob'`, and on that path `error.response.data` is a
+ * Blob whose `.error.code` is undefined. A 401 is a 401 in both shapes.
+ */
+api.interceptors.response.use(undefined, async (error) => {
+  const original = error.config
+  if (error.response?.status !== 401 || !original || original._retriedWithFreshToken) {
+    throw error
+  }
+  const user = auth.currentUser
+  if (!user) throw error
+
+  original._retriedWithFreshToken = true
+  try {
+    original.headers.Authorization = `Bearer ${await user.getIdToken(true)}`
+  } catch {
+    throw error
+  }
+  return api.request(original)
 })
 
 /**
@@ -129,6 +203,34 @@ export function postEnveloped(path, body = {}, config) {
 /** DELETE an enveloped endpoint. */
 export function deleteEnveloped(path, config) {
   return request('delete', path, undefined, config)
+}
+
+/* ---------------------------------------------------------------------------
+   Identity
+
+   The phone number is never sent. Both calls are authenticated by the Bearer
+   token alone, and the backend reads the number out of the VERIFIED token -
+   which is the whole security property of the sign-in flow. Sending a phone
+   number here would be sending something the server is right to ignore.
+   --------------------------------------------------------------------------- */
+
+/**
+ * Establish (or re-establish) the backend session for the signed-in user.
+ *
+ * Called the moment Firebase confirms the OTP, and again on every boot with a
+ * persisted user. Creates the account and its portfolio on a first login;
+ * returns the same ids on every call after that.
+ *
+ * @returns {Promise<{user_id: number, phone: string, portfolio_id: number,
+ *   portfolio_name: string, base_currency: string, first_login: boolean}>}
+ */
+export function startSession() {
+  return postEnveloped('/api/auth/session/')
+}
+
+/** Who the current token belongs to, and which portfolio is theirs. A pure read. */
+export function getMe() {
+  return getEnveloped('/api/auth/me/')
 }
 
 /** The full risk report for a portfolio. */
