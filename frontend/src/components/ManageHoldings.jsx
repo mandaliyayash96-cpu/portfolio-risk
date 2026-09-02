@@ -1,5 +1,5 @@
 /**
- * Holdings entry: type one in, or upload a CSV of them.
+ * Holdings entry: connect a broker, type one in, or upload a CSV of them.
  *
  * Self-contained in the same way <AlertsPanel> is. It owns its two forms, its
  * busy states and its errors, and the only thing it hands upward is a single
@@ -33,11 +33,16 @@
  *
  * WHAT THE CSV REPORT IS
  * ----------------------
- * An import is not pass/fail. The backend commits every valid row and reports
- * the rest, so a 50-row export with two bad lines loads 48 positions and hands
- * back two reasons. Rendering only a count would throw away the half of that
- * answer the user has to act on, so the per-row table is the primary result
- * here and the counts are the summary above it.
+ * An import is not pass/fail, and <ImportReport> is where that is rendered -
+ * for the CSV upload and the broker sync alike, since the backend answers both
+ * with the same report.
+ *
+ * THE THREE SECTIONS, AND WHY BROKERS COME FIRST
+ * ----------------------------------------------
+ * <BrokerConnect> is the fastest way to fill an empty portfolio - one click and
+ * five positions - so it is above the two forms that ask you to type. It is
+ * also the one that is SIMULATED, which it says on its own face; this component
+ * treats it as an ordinary child and knows nothing about that.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -52,6 +57,8 @@ import {
 import { UNLOCK_PRICE_LABEL } from '../api/payments'
 import { PAYMENT_CANCELLED, useUnlock } from '../payments/unlock-context'
 import { moneyPrecise } from '../format'
+import BrokerConnect from './BrokerConnect'
+import ImportReport from './ImportReport'
 
 /** How long a write may take before the label admits it is fetching prices. */
 const SLOW_WRITE_MS = 600
@@ -78,12 +85,6 @@ const EMPTY_FORM = {
   buy_date: '',
   asset_type: 'EQUITY',
   sector: '',
-}
-
-const STATUS_CLASS = {
-  added: 'pill pill--good',
-  updated: 'pill pill--info',
-  skipped: 'pill pill--bad',
 }
 
 /** True when the user closed the payment sheet rather than the write failing. */
@@ -491,52 +492,6 @@ function ImportForm({ portfolioId, onChanged }) {
   )
 }
 
-/** The per-row outcome of one import: counts, then every row and its reason. */
-function ImportReport({ report }) {
-  const { added, updated, skipped, total_rows: totalRows, results = [] } = report
-  const tone = skipped > 0 ? 'banner--warn' : 'banner--good'
-
-  return (
-    <div className="manage__report">
-      <p className={`banner ${tone}`} role="status">
-        <strong>
-          {added} added · {updated} updated · {skipped} skipped
-        </strong>{' '}
-        out of {totalRows} row{totalRows === 1 ? '' : 's'}.
-      </p>
-
-      {results.length > 0 && (
-        <div className="manage__report-scroll">
-          <table className="table table--compact">
-            <thead>
-              <tr>
-                <th scope="col" className="table__num">Row</th>
-                <th scope="col">Ticker</th>
-                <th scope="col">Result</th>
-                <th scope="col">Detail</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((row) => (
-                <tr key={`${row.row}-${row.ticker ?? 'blank'}`}>
-                  <td className="table__num">{row.row}</td>
-                  <th scope="row" className="table__ticker">{row.ticker ?? '--'}</th>
-                  <td>
-                    <span className={STATUS_CLASS[row.status] ?? 'pill'}>{row.status}</span>
-                  </td>
-                  {/* reason explains a skip, warning explains a row that saved
-                      without prices. Only one is ever set. */}
-                  <td className="manage__reason">{row.reason ?? row.warning ?? '--'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  )
-}
-
 /* ---------------------------------------------------------------------------
    Shell
    --------------------------------------------------------------------------- */
@@ -552,7 +507,7 @@ export default function ManageHoldings({ portfolioId, onChanged }) {
         <div>
           <h2 className="panel__title">Manage holdings</h2>
           <p className="panel__subtitle">
-            Add a position by hand or import a CSV. Editing costs{' '}
+            Connect a broker, add a position by hand, or import a CSV. Editing costs{' '}
             {UNLOCK_PRICE_LABEL} per round — you are asked when you save, not before.
           </p>
         </div>
@@ -577,6 +532,16 @@ export default function ManageHoldings({ portfolioId, onChanged }) {
       )}
 
       <div className="panel__body manage__body">
+        <div className="manage__section">
+          <h3 className="manage__heading">
+            Connect a broker
+            {/* Labelled on the heading as well as in the note below it: the
+                note explains the demo, this makes it unmissable at a glance. */}
+            <span className="pill pill--info">Simulated</span>
+          </h3>
+          <BrokerConnect portfolioId={portfolioId} onChanged={onChanged} />
+        </div>
+
         <div className="manage__section">
           <h3 className="manage__heading">Add one</h3>
           <ManualForm portfolioId={portfolioId} onChanged={onChanged} />

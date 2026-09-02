@@ -21,9 +21,10 @@ cannot delete out of a portfolio that is not theirs even by guessing both ids.
 
 EDITING IS PAID; READING IS FREE
 --------------------------------
-All three endpoints below WRITE, and every one of them calls
-`payments.gating.require_editing_unlock` first. Editing holdings costs ₹9 for a
-round of changes, so a request without a live unlock is refused with 402
+Every write below - the manual add, the CSV import, the broker import and the
+delete - calls `payments.gating.require_editing_unlock` first. Editing holdings
+costs ₹9 for a round of changes, so a request without a live unlock is refused
+with 402
 {"code": "payment_required"} - and one without a signed-in user with 401,
 because a grant belongs to an account.
 
@@ -44,7 +45,12 @@ from rest_framework.response import Response
 from accounts.selectors import resolve_portfolio_id
 from payments.gating import require_editing_unlock
 from portfolio.selectors import list_holdings
-from portfolio.services import add_holding, delete_holding, import_holdings_csv
+from portfolio.services import (
+    add_holding,
+    delete_holding,
+    import_broker_holdings,
+    import_holdings_csv,
+)
 
 
 @api_view(["GET", "POST"])
@@ -136,6 +142,37 @@ def holdings_import(request, portfolio_id: int):
     return Response(
         import_holdings_csv(resolve_portfolio_id(request, portfolio_id), request.FILES.get("file"))
     )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def import_broker(request, portfolio_id: int):
+    """
+    POST /api/portfolio/<portfolio_id>/import-broker/
+
+    Body: {"broker": "zerodha" | "groww" | "upstox" | "icici"}
+
+    Pulls that broker's holdings into the portfolio and returns the CSV
+    importer's report shape, plus `broker`, `broker_label` and `simulated`.
+
+    THE FETCH IS SIMULATED. The rows come from a preset table in
+    `portfolio.brokers`; no broker is contacted and no credential is asked for.
+    The WRITE is not simulated - it upserts on ticker through the same service
+    the manual form and the CSV import use, so importing two brokers that both
+    report HDFCBANK.NS leaves one consolidated position.
+
+    Gated like every other write: 402 without a live ₹9 unlock, 401 with no
+    account. A broker import and a single add are the same one unlock.
+    """
+    # First, as everywhere else on this page - an unpaid caller hears "editing
+    # is locked", not a broker name they cannot use yet anyway.
+    require_editing_unlock(request)
+
+    portfolio_id = resolve_portfolio_id(request, portfolio_id)
+    # Same normalisation the add view does, and for the same reason: a bare
+    # JSON array or string arrives as a list/str, where .get() raises.
+    body = request.data if isinstance(request.data, dict) else {}
+    return Response(import_broker_holdings(portfolio_id, body.get("broker")))
 
 
 @api_view(["DELETE"])

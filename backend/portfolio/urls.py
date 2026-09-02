@@ -19,6 +19,10 @@ app_name = "portfolio"
 urlpatterns = [
     path("<int:portfolio_id>/holdings/", views.holdings, name="holdings"),
     path("<int:portfolio_id>/holdings/import/", views.holdings_import, name="holdings-import"),
+    # Broker aggregation. Sits beside `holdings/` rather than under it because
+    # what it names is the SOURCE being connected, not a sub-resource of the
+    # holdings collection - even though what it ultimately writes is holdings.
+    path("<int:portfolio_id>/import-broker/", views.import_broker, name="import-broker"),
     path(
         "<int:portfolio_id>/holdings/<int:holding_id>/",
         views.holding_detail,

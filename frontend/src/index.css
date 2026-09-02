@@ -2144,6 +2144,153 @@ a {
 }
 
 /* ---------------------------------------------------------------------------
+   Connect a broker (SIMULATED)
+
+   Four cards that look like an integration and are not one - which is why the
+   heading carries a "Simulated" pill and the section ends with a note saying
+   so in words. Nothing here should be made to look more like a real login than
+   it already does.
+
+   The badge is a coloured circle with the broker's initial, NOT their logo:
+   reproducing a trademark to suggest an integration that does not exist is a
+   problem no amount of styling fixes. The colour arrives per card as
+   `--broker-tint`, set inline by <BrokerConnect>, so the four hexes live with
+   the list they belong to and this file keeps its rule about naming no colours.
+   --------------------------------------------------------------------------- */
+.broker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.broker__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: var(--space-3);
+}
+
+/* A button, so it is keyboard-reachable and announces itself as pressable -
+   a div with an onClick would be neither. */
+.broker__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+
+.broker__card:hover:not(:disabled) {
+  border-color: var(--broker-tint, var(--border-strong));
+  background: var(--surface-sunken);
+  transform: translateY(-1px);
+}
+
+.broker__card:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* Every card greys out while any import runs, including the one that started
+   it - so the disabled state cannot be read as "this broker is unavailable".
+   The card in flight is the one showing a spinner. */
+.broker__card:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.broker__card[aria-busy='true'] {
+  /* The active card stays at full strength, or the thing you just pressed is
+     the dimmest thing on screen. */
+  opacity: 1;
+  border-color: var(--broker-tint, var(--border-strong));
+}
+
+.broker__badge {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--broker-tint, var(--brand));
+  /* White on all four tints clears 4.5:1, and the badge is decorative anyway -
+     the broker's name is spelled out directly beneath it. */
+  color: #fff;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.broker__name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.broker__action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+
+/* What the broker "reported", as chips - the statement, before the import is
+   applied to it. A list rather than a table because it is a glance, not a
+   record; the outcome table underneath is the record. */
+.broker__statement {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.broker__position {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 0.2rem var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-size: 0.75rem;
+}
+
+.broker__position-ticker {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.broker__position-qty {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The honest note. Warn-toned rather than neutral: it is a caveat about what
+   the section above it actually does, and it should not be skimmable. */
+.broker__note {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-md);
+  background: var(--warn-wash);
+  color: var(--warn);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+/* ---------------------------------------------------------------------------
    Payment modal
 
    Opened only when the SERVER refuses a write with a 402, which means by the

@@ -323,6 +323,38 @@ export function deleteHolding(portfolioId, holdingId) {
 }
 
 /**
+ * Pull one broker's holdings into the portfolio. THE FETCH IS SIMULATED.
+ *
+ * The backend does not contact Zerodha, Groww, Upstox or ICICI Direct, and
+ * this call sends no credential because there is none to send: the server
+ * returns a preset sample per broker - see `portfolio/brokers.py` and the note
+ * rendered under the section in <BrokerConnect>.
+ *
+ * What is NOT simulated is the write. The rows go through the same validation,
+ * the same upsert-on-ticker and the same price warm-up as a CSV import, so
+ * importing two brokers that both report HDFCBANK.NS leaves one position - the
+ * consolidation this feature exists to show.
+ *
+ * Resolves with the CSV importer's report shape ({total_rows, added, updated,
+ * skipped, results[], price_fetch}) plus {broker, broker_label, simulated},
+ * which is why <ImportReport> renders both without knowing the difference.
+ *
+ * Carries WRITE_TIMEOUT_MS for the same reason the other writes do: a broker's
+ * sample can be six symbols the backend has never priced, and it fetches every
+ * one of them before answering.
+ *
+ * @throws {ApiError} code `invalid_input` for an unknown broker, or
+ *   `payment_required` (402) when the editing round has not been paid for.
+ */
+export function importBroker(portfolioId, broker) {
+  return postEnveloped(
+    `/api/portfolio/${portfolioId}/import-broker/`,
+    { broker },
+    { timeout: WRITE_TIMEOUT_MS },
+  )
+}
+
+/**
  * The columns a CSV must have, and one filled-in example row.
  *
  * Kept beside the calls above rather than inside the component because it is a

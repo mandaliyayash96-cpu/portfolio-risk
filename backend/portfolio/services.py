@@ -60,6 +60,7 @@ from common.models import (
 from marketdata import services as marketdata_services
 from marketdata.providers import MarketDataProvider
 from marketdata.selectors import get_stored_tickers
+from portfolio.brokers import broker_label, fetch_broker_holdings, normalise_broker
 from portfolio.models import AssetType, Holding, Portfolio
 from portfolio.selectors import get_holding, get_portfolio, serialize_holding
 
@@ -768,6 +769,192 @@ def import_holdings_csv(
     return {
         "portfolio_id": portfolio.pk,
         "total_rows": total_rows,
+        "added": counts[ADDED],
+        "updated": counts[UPDATED],
+        "skipped": counts[SKIPPED],
+        "results": results,
+        "price_fetch": {
+            "attempted": bool(fetch_prices and accepted),
+            "warnings": warnings,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Broker aggregation (SIMULATED)
+#
+# The positions come from `portfolio.brokers`, which is a preset table and not
+# a broker - read that module's docstring before believing anything else here.
+# Everything AFTER the fetch is the real write path: the same validation, the
+# same upsert, the same price warm-up, the same one-transaction rule and the
+# same per-row report as a CSV import.
+# ---------------------------------------------------------------------------
+def import_broker_holdings(
+    portfolio_id: int,
+    broker,
+    *,
+    fetch_prices: bool = True,
+    provider: MarketDataProvider | None = None,
+) -> dict:
+    """
+    Pull one broker's holdings into the portfolio. The FETCH is simulated.
+
+    WHAT IS REAL AND WHAT IS NOT
+    ----------------------------
+    Not real: where the rows come from. `fetch_broker_holdings` returns a
+    hardcoded sample per broker and touches no network - it is the seam a live
+    Kite Connect / Upstox integration would replace.
+
+    Real: everything this function then does with them. Rows go through
+    `_validated_fields`, land through `_upsert`, and have their prices warmed by
+    `fetch_prices_for` - the same three functions `add_holding` and
+    `import_holdings_csv` use, so a broker import cannot accept a position the
+    manual form would have rejected, and cannot store one in a different shape.
+
+    WHY IT UPSERTS, AND WHY THAT IS THE FEATURE
+    -------------------------------------------
+    Aggregation means one consolidated portfolio, not four stacked copies.
+    `_upsert` keys on (portfolio, ticker), so importing Zerodha and then ICICI
+    Direct - both of which report HDFCBANK.NS in the sample data - leaves ONE
+    HDFCBANK position, and re-importing the same broker twice changes nothing.
+    That is the same idempotence re-importing a CSV has, for the same reason.
+
+    Args:
+        portfolio_id: which portfolio, from the URL.
+        broker: one of `brokers.SUPPORTED_BROKERS`.
+        fetch_prices: warm prices for newly seen tickers. Tests switch it off.
+        provider: market data provider override, mainly for tests.
+
+    Returns:
+        The CSV importer's report shape, so the dashboard renders both with one
+        component, plus four keys of its own:
+            broker        - the canonical slug
+            broker_label  - its display name, e.g. "ICICI Direct"
+            simulated     - always True. The response says so out loud rather
+                            than leaving the frontend to remember it.
+            holdings      - what the broker "reported", verbatim, before this
+                            portfolio was touched. The report says what was
+                            DONE with each row; this says what arrived, so a
+                            client can show the statement it imported from
+                            without re-deriving it from the outcome.
+        `row` in each result is the position's place in the broker's statement
+        (1-based), which is the nearest honest equivalent of a CSV line number.
+
+    Raises:
+        NotFoundError (404):     no such portfolio.
+        InvalidInputError (400): unknown broker.
+
+    Never raises for a price fetch that fails - see `fetch_prices_for`.
+    """
+    # Before the portfolio lookup: an unknown broker is the caller's mistake and
+    # nothing should be read or written on the strength of it.
+    slug = normalise_broker(broker)
+    portfolio = get_portfolio(portfolio_id)  # 404s on a bad id
+    rows = fetch_broker_holdings(slug)  # MOCK: preset sample, no network.
+
+    results: list[dict] = []
+    accepted: list[dict] = []
+    seen: dict[str, int] = {}  # ticker -> the position that claimed it
+
+    for position, row in enumerate(rows, start=1):
+        try:
+            fields = _validated_fields(
+                ticker=row.get("ticker"),
+                quantity=row.get("quantity"),
+                avg_buy_price=row.get("avg_buy_price"),
+                buy_date=row.get("buy_date"),
+                asset_type=row.get("asset_type"),
+                sector=row.get("sector"),
+            )
+        except DomainError as exc:
+            # Only reachable if the preset table itself is wrong, so it is
+            # logged as OUR bug - but it is still reported per-row rather than
+            # raised, because one bad sample must not sink the other four.
+            logger.warning("Sample data for broker %s has a bad row: %s", slug, exc.message)
+            results.append(
+                {
+                    "row": position,
+                    "ticker": str(row.get("ticker") or "").strip().upper() or None,
+                    "status": SKIPPED,
+                    "reason": exc.message,
+                    "warning": None,
+                }
+            )
+            continue
+
+        symbol = fields["ticker"]
+        if symbol in seen:
+            # Same rule as the CSV importer: first occurrence wins, so the
+            # outcome does not depend on the order of a list we control.
+            results.append(
+                {
+                    "row": position,
+                    "ticker": symbol,
+                    "status": SKIPPED,
+                    "reason": (
+                        f"Duplicate ticker in this broker's holdings - position "
+                        f"{seen[symbol]} already sets it."
+                    ),
+                    "warning": None,
+                }
+            )
+            continue
+
+        seen[symbol] = position
+        accepted.append({"position": position, "fields": fields})
+
+    # One transaction for the whole broker, exactly as the CSV path does: a
+    # database failure halfway through must not leave half a broker imported.
+    with transaction.atomic():
+        for entry in accepted:
+            _holding, created = _upsert(portfolio, entry["fields"])
+            results.append(
+                {
+                    "row": entry["position"],
+                    "ticker": entry["fields"]["ticker"],
+                    "status": ADDED if created else UPDATED,
+                    "reason": None,
+                    "warning": None,
+                }
+            )
+
+    results.sort(key=lambda entry: entry["row"])
+
+    # Committed. Prices are warmed after, and only for what actually landed.
+    warnings: dict[str, str] = {}
+    if fetch_prices and accepted:
+        warnings = fetch_prices_for(
+            [entry["fields"]["ticker"] for entry in accepted], provider=provider
+        )
+        for entry in results:
+            if entry["status"] in (ADDED, UPDATED):
+                entry["warning"] = warnings.get(entry["ticker"])
+
+    counts = {ADDED: 0, UPDATED: 0, SKIPPED: 0}
+    for entry in results:
+        counts[entry["status"]] += 1
+
+    logger.info(
+        "Simulated %s import into portfolio %s: %s added, %s updated, %s skipped.",
+        slug,
+        portfolio_id,
+        counts[ADDED],
+        counts[UPDATED],
+        counts[SKIPPED],
+    )
+
+    return {
+        "portfolio_id": portfolio.pk,
+        "broker": slug,
+        "broker_label": broker_label(slug),
+        # Said in the payload, not just in the UI copy: any client reading this
+        # response should be able to tell that the source was a sample.
+        "simulated": True,
+        # The statement as it arrived. `rows` is already this request's private
+        # deep copy (see fetch_broker_holdings), and nothing above mutates it,
+        # so it can be handed back as-is.
+        "holdings": rows,
+        "total_rows": len(rows),
         "added": counts[ADDED],
         "updated": counts[UPDATED],
         "skipped": counts[SKIPPED],
