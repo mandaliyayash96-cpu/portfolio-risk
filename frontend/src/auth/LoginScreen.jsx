@@ -39,6 +39,25 @@
  * here. Everything below still runs unchanged; it is just talking to a mock.
  * See firebase.js for the three guards that keep it out of a production build.
  *
+ * THE NUMBER IS PREFILLED, THE VERIFICATION IS NOT SKIPPED
+ * --------------------------------------------------------
+ * A returning visitor arrives with their number already in the box, because
+ * the last one to sign in successfully on this browser was written to
+ * localStorage (remembered-phone.js). That is the whole of the "fast
+ * re-login": one tap on Send OTP, then the six digits.
+ *
+ * It shortens the TYPING, never the CHECKING. There is no path here that turns
+ * a remembered number into a session - no cached token, no cached portfolio id,
+ * no "this browser was trusted last time". Every arrival at this screen ends in
+ * a real OTP and a fresh Firebase credential, exactly as it did before, because
+ * the alternative is a login screen that can be passed by editing localStorage.
+ *
+ * Most returning users never see this screen at all: the Firebase session is
+ * persisted in localStorage (firebase.js) and restored on boot, so they land on
+ * the dashboard until they explicitly log out. Logging out clears that session
+ * and keeps the number - the security boundary is the credential, not the phone
+ * number printed on the form.
+ *
  * WHAT THIS COMPONENT DOES NOT DO
  * -------------------------------
  * It does not talk to our backend, and it does not decide what happens after a
@@ -55,6 +74,7 @@ import BrandMark from '../components/BrandMark'
 import ThemeToggle from '../components/ThemeToggle'
 import { useAuth } from './auth-context'
 import { firebaseErrorMessage } from './firebase-errors'
+import { forgetPhone, isE164, readRememberedPhone, rememberPhone } from './remembered-phone'
 
 /** India. The dashboard prices NSE equities in rupees; this is who it is for. */
 const DEFAULT_DIAL_CODE = '+91'
@@ -62,14 +82,13 @@ const DEFAULT_DIAL_CODE = '+91'
 /** Firebase phone auth sends six digits. */
 const OTP_LENGTH = 6
 
-/**
- * E.164, which is the only form Firebase accepts: a +, a country code that
- * cannot start with 0, then up to fourteen more digits.
- *
- * Checked here as well as by Firebase so a typo costs a render rather than a
- * round trip and a burnt reCAPTCHA token.
+/*
+ * The E.164 check is `isE164`, imported above. It is checked here as well as by
+ * Firebase so a typo costs a render rather than a round trip and a burnt
+ * reCAPTCHA token - and it lives in remembered-phone.js because that module has
+ * to apply the same rule to a value read back out of localStorage. One rule,
+ * one definition.
  */
-const E164 = /^\+[1-9]\d{7,14}$/
 
 /** Strip everything a person types for readability: spaces, dashes, brackets. */
 function normalisePhone(raw) {
@@ -81,11 +100,31 @@ export default function LoginScreen() {
 
   // 'phone' -> enter the number; 'code' -> enter the six digits.
   const [step, setStep] = useState('phone')
-  const [phone, setPhone] = useState(DEFAULT_DIAL_CODE)
+
+  /*
+   * The number this browser last signed in with, if any.
+   *
+   * Read ONCE, in a lazy initialiser, not on every render: localStorage is
+   * synchronous and this is the render path. Held in state as well as seeded
+   * into the field because the two answer different questions - `phone` is what
+   * is in the box right now (the user may be editing it), `rememberedPhone` is
+   * whether there is anything to forget, which is what decides if the "Not you?"
+   * link is shown at all.
+   */
+  const [rememberedPhone, setRememberedPhone] = useState(readRememberedPhone)
+  const [phone, setPhone] = useState(() => readRememberedPhone() ?? DEFAULT_DIAL_CODE)
   const [code, setCode] = useState('')
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
   const [isBusy, setIsBusy] = useState(false)
+
+  /*
+   * Is the box still showing the number we remembered? Drives both the
+   * "welcome back" copy and the "Not you?" link. Derived rather than stored, so
+   * it cannot drift out of step with the field the user is typing into - the
+   * link disappears the moment they change a digit.
+   */
+  const isPrefilled = Boolean(rememberedPhone) && phone === rememberedPhone
 
   // The <div> Firebase renders the invisible widget into.
   const recaptchaRef = useRef(null)
@@ -171,7 +210,7 @@ export default function LoginScreen() {
     if (isBusy) return
 
     const number = normalisePhone(phone)
-    if (!E164.test(number)) {
+    if (!isE164(number)) {
       setError(
         'Enter the number in international format, starting with the country code - e.g. +91 98765 43210.',
       )
@@ -227,6 +266,11 @@ export default function LoginScreen() {
       // Signed in. Firebase now holds the credential and has already told
       // <AuthProvider>; this only puts the spinner up for the gap before the
       // session lands. This component unmounts a moment later.
+      //
+      // The number is remembered HERE - after the OTP was accepted, not when it
+      // was sent - so a typo that never verified is never prefilled back at the
+      // user. It survives log out on purpose; see remembered-phone.js.
+      rememberPhone(phone)
       login()
     } catch (verifyError) {
       setError(firebaseErrorMessage(verifyError, 'verify'))
@@ -248,6 +292,23 @@ export default function LoginScreen() {
     confirmationRef.current = null
     setStep('phone')
     setCode('')
+    setError(null)
+    setNotice(null)
+  }
+
+  /**
+   * "Not you?" - drop the remembered number and empty the field back to the
+   * dial code.
+   *
+   * The escape hatch for a shared browser, and for a developer switching
+   * between a Firebase test number and a real one. It clears only the stored
+   * NUMBER; there is no session to clear here, because this link is only
+   * reachable from the signed-out login screen.
+   */
+  function useDifferentNumber() {
+    forgetPhone()
+    setRememberedPhone(null)
+    setPhone(DEFAULT_DIAL_CODE)
     setError(null)
     setNotice(null)
   }
@@ -275,16 +336,18 @@ export default function LoginScreen() {
         <div className="login__brand">
           <BrandMark />
           <div>
-            <p className="login__wordmark">Portfolio Risk</p>
-            <p className="login__eyebrow">Investor monitoring &amp; risk management</p>
+            <p className="login__wordmark">Clarisk</p>
+            <p className="login__eyebrow">See your risk clearly.</p>
           </div>
         </div>
 
         <h1 className="login__title">Sign in</h1>
         <p className="login__subtitle">
-          {step === 'phone'
-            ? 'We will text you a six-digit code. Your portfolio is tied to this number.'
-            : `Enter the ${OTP_LENGTH}-digit code sent to ${phone}.`}
+          {step === 'code'
+            ? `Enter the ${OTP_LENGTH}-digit code sent to ${phone}.`
+            : isPrefilled
+              ? 'Welcome back. Send a fresh code to the number below to sign in again.'
+              : 'We will text you a six-digit code. Your portfolio is tied to this number.'}
         </p>
 
         {/*
@@ -324,6 +387,24 @@ export default function LoginScreen() {
               {isBusy && <span className="spinner spinner--inline" aria-hidden="true" />}
               {isBusy ? 'Sending…' : 'Send OTP'}
             </button>
+
+            {/*
+              Only while the box still holds the remembered number. The moment
+              the user edits the field they are already using a different
+              number, and a link offering to do what they are doing is noise.
+            */}
+            {isPrefilled && (
+              <div className="login__links">
+                <button
+                  type="button"
+                  className="login__link"
+                  onClick={useDifferentNumber}
+                  disabled={isBusy}
+                >
+                  Not you? Use a different number
+                </button>
+              </div>
+            )}
           </form>
         ) : (
           <form className="login__form" onSubmit={verifyCode} noValidate>

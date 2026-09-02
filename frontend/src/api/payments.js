@@ -136,7 +136,7 @@ export function openCheckout(order, profile = {}) {
       order_id: order.order_id,
       amount: order.amount,
       currency: order.currency,
-      name: 'Portfolio Risk',
+      name: 'Clarisk',
       description: 'Unlock holdings editing for one session',
       prefill: { contact: profile.contact ?? '' },
       // The rupee-coloured accent, so the sheet does not arrive looking like a

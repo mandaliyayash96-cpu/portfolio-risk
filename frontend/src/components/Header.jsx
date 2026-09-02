@@ -73,8 +73,8 @@ export default function Header({ report, lastUpdated, isRefreshing, portfolioId 
         <div className="header__brand">
           <BrandMark />
           <div className="header__wordmark">
-            <p className="header__eyebrow">Portfolio Risk</p>
-            <p className="header__product">Investor monitoring &amp; risk management</p>
+            <p className="header__eyebrow">Clarisk</p>
+            <p className="header__product">See your risk clearly.</p>
           </div>
         </div>
 
