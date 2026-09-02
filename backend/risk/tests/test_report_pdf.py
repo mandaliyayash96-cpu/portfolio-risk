@@ -343,13 +343,20 @@ class TestEndpointErrors:
     def test_holdings_without_prices_return_the_json_envelope(
         self, client, portfolio, holding_factory
     ):
-        """Nothing has been fetched for this ticker: 422, not a broken file."""
+        """
+        Nothing fetched for the only holding: an envelope, not a broken file.
+
+        400/empty_portfolio rather than the old 422/missing_price_data - with
+        every holding excluded there is no report to typeset. A portfolio where
+        only SOME holdings are unpriced now renders a perfectly good PDF, with
+        the exclusions printed in its warnings block.
+        """
         holding_factory("NOPRICES.NS", "10")
 
         response = client.get(url(portfolio.pk))
 
-        assert response.status_code == 422
-        assert response.json()["error"]["code"] == "missing_price_data"
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "empty_portfolio"
         assert not response.content.startswith(b"%PDF")
 
     def test_error_envelope_is_json_even_when_the_client_demands_pdf(

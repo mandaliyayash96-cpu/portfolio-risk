@@ -17,8 +17,10 @@ from common.exceptions import InvalidInputError, NotFoundError
 from marketdata.models import PriceHistory, PriceSnapshot
 from portfolio.models import AssetType, Holding
 from portfolio.services import (
+    ADDED,
     MAX_CSV_BYTES,
     MAX_CSV_ROWS,
+    SKIPPED,
     add_holding,
     delete_holding,
     import_holdings_csv,
@@ -484,3 +486,145 @@ class TestImportCsvRejection:
     def test_unknown_portfolio_is_not_found(self, csv_upload, good_csv):
         with pytest.raises(NotFoundError):
             import_holdings_csv(999_999, csv_upload(good_csv))
+
+
+# ---------------------------------------------------------------------------
+# Ticker hygiene on entry (Safeguard 2)
+#
+# The write path's half of the dead-ticker problem. The risk report now
+# survives a symbol it cannot price (risk/tests/test_services.py), but the
+# better outcome is for the user to learn at the moment they type it - while
+# they still remember what they meant - rather than from a warning banner a day
+# later. Nothing here rejects a holding: every one of these still saves.
+# ---------------------------------------------------------------------------
+class TestTickerNormalisation:
+    @pytest.mark.parametrize(
+        "typed",
+        ["reliance.ns", "  RELIANCE.NS  ", "Reliance.Ns", "\treliance.NS\n"],
+    )
+    def test_case_and_whitespace_are_normalised(self, portfolio, stub_provider, typed):
+        result = add_holding(portfolio.pk, typed, "10", "1400", provider=stub_provider)
+
+        assert result["ticker"] == "RELIANCE.NS"
+        assert Holding.objects.filter(portfolio=portfolio, ticker="RELIANCE.NS").exists()
+
+    def test_normalising_makes_two_spellings_one_position(self, portfolio, stub_provider):
+        """The upsert key is the NORMALISED ticker, so these cannot both exist."""
+        add_holding(portfolio.pk, "reliance.ns", "10", "1400", provider=stub_provider)
+        second = add_holding(portfolio.pk, "RELIANCE.NS", "20", "1500", provider=stub_provider)
+
+        assert second["created"] is False
+        assert Holding.objects.filter(portfolio=portfolio).count() == 1
+
+
+class TestSuffixHint:
+    def test_a_bare_symbol_is_saved_and_warned_about(self, portfolio, stub_provider):
+        """
+        The requirement in one test: do NOT auto-correct, DO say something.
+
+        "TCS" is stored as "TCS" - a symbol the user did not type is one they
+        cannot debug - and the warning names the symbol we suspect they meant.
+        """
+        result = add_holding(portfolio.pk, "TCS", "10", "3200", provider=stub_provider)
+
+        assert result["ticker"] == "TCS"
+        assert Holding.objects.filter(portfolio=portfolio, ticker="TCS").exists()
+        assert not Holding.objects.filter(portfolio=portfolio, ticker="TCS.NS").exists()
+        assert "TCS.NS" in result["warning"]
+        assert "no exchange suffix" in result["warning"]
+
+    def test_a_suffixed_symbol_is_not_warned_about(self, portfolio, stub_provider):
+        result = add_holding(
+            portfolio.pk, "RELIANCE.NS", "10", "1400", provider=stub_provider
+        )
+
+        assert result["warning"] is None
+
+    @pytest.mark.parametrize("symbol", ["BTC-USD", "ETH-USD"])
+    def test_pair_symbols_are_not_warned_about(self, portfolio, symbol):
+        """
+        A hyphenated pair is how yfinance spells crypto and FX. It has no
+        exchange suffix and is not missing one, so the hint would be noise.
+        """
+        result = add_holding(
+            portfolio.pk, symbol, "1", "5000000", fetch_prices=False
+        )
+
+        assert result["warning"] is None
+
+    def test_the_hint_also_reaches_a_csv_row(self, portfolio, csv_upload):
+        """One validation seam, so the importer inherits this for free."""
+        report = import_holdings_csv(
+            portfolio.pk,
+            csv_upload("ticker,quantity,avg_buy_price\nTCS,5,3200\n"),
+            fetch_prices=False,
+        )
+
+        row = report["results"][0]
+        assert row["status"] == ADDED
+        assert "TCS.NS" in row["warning"]
+
+
+class TestUnverifiedFlag:
+    def test_a_symbol_with_no_prices_is_saved_but_flagged(self, portfolio, stub_provider):
+        """
+        The point of the flag: the row lands, and the user is told immediately
+        that the risk report cannot use it yet - rather than finding out later.
+        """
+        result = add_holding(
+            portfolio.pk, "NOTAREALTICKER.NS", "10", "1400", provider=stub_provider
+        )
+
+        assert Holding.objects.filter(ticker="NOTAREALTICKER.NS").exists()
+        assert result["unverified"] is True
+        assert result["warning"]
+
+    def test_a_symbol_the_feed_knows_is_not_flagged(self, portfolio, stub_provider):
+        result = add_holding(
+            portfolio.pk, "RELIANCE.NS", "10", "1400", provider=stub_provider
+        )
+
+        assert result["unverified"] is False
+
+    def test_unverified_tracks_stored_history_not_the_fetch(self, portfolio):
+        """
+        The flag answers the question the RISK REPORT asks - "is there history
+        to value this with?" - not "did a fetch just happen". A symbol whose
+        history is already stored is verified without any fetch at all.
+        """
+        PriceHistory.objects.create(
+            ticker="RELIANCE.NS", date=date(2026, 1, 5), close=Decimal("1000.0000")
+        )
+
+        result = add_holding(portfolio.pk, "RELIANCE.NS", "10", "1400")
+
+        assert result["unverified"] is False
+
+    def test_import_rows_carry_the_flag_per_row(
+        self, portfolio, csv_upload, stub_provider
+    ):
+        report = import_holdings_csv(
+            portfolio.pk,
+            csv_upload(
+                "ticker,quantity,avg_buy_price\n"
+                "RELIANCE.NS,10,1400\n"
+                "NOSUCHTICKER.NS,5,100\n"
+            ),
+            provider=stub_provider,
+        )
+
+        by_ticker = {row["ticker"]: row for row in report["results"]}
+        assert by_ticker["RELIANCE.NS"]["unverified"] is False
+        assert by_ticker["NOSUCHTICKER.NS"]["unverified"] is True
+
+    def test_a_skipped_row_is_not_unverified(self, portfolio, csv_upload):
+        """It was never written, so there is nothing to verify."""
+        report = import_holdings_csv(
+            portfolio.pk,
+            csv_upload("ticker,quantity,avg_buy_price\nRELIANCE.NS,-5,1400\n"),
+            fetch_prices=False,
+        )
+
+        row = report["results"][0]
+        assert row["status"] == SKIPPED
+        assert row["unverified"] is False

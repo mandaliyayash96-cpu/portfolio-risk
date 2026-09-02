@@ -333,7 +333,7 @@ function ManualForm({ portfolioId, onChanged }) {
 
       {result && (
         <p
-          className={`banner ${result.warning ? 'banner--warn' : 'banner--good'}`}
+          className={`banner ${result.warning || result.unverified ? 'banner--warn' : 'banner--good'}`}
           role="status"
         >
           <strong>
@@ -341,6 +341,19 @@ function ManualForm({ portfolioId, onChanged }) {
           </strong>{' '}
           — {result.quantity} units at {result.avg_buy_price}.
           {result.warning ? ` ${result.warning}` : ''}
+          {/* Said separately from `warning` because it is a different kind of
+              fact: the warning is about the SYMBOL, this is about what the
+              dashboard can do with it right now. The position is saved either
+              way - the point is that they learn it here, not from a risk report
+              that quietly leaves the position out. */}
+          {result.unverified && (
+            <>
+              {' '}
+              <span className="pill pill--bad">Unverified</span>{' '}
+              No price data for this symbol yet, so it is excluded from the risk
+              report until prices arrive.
+            </>
+          )}
         </p>
       )}
     </form>

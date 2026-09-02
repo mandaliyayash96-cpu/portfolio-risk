@@ -206,13 +206,24 @@ class TestReadsAreFree:
 
     def test_the_risk_report_needs_no_payment(self, api, portfolio, holding):
         """
-        422 rather than 200 only because this portfolio has no stored prices -
-        which is exactly the point: it is a DATA answer, not a payment one.
+        An error rather than 200 only because this portfolio has no stored
+        prices - which is exactly the point: it is a DATA answer, not a
+        payment one.
+
+        `empty_portfolio` is what a wholly unpriceable portfolio now returns:
+        holdings with no price data are excluded from the report rather than
+        failing it, and when that leaves nothing there is nothing to measure.
+        The set is spelled out so this test keeps asserting "not a payment
+        problem" rather than pinning one particular data gap.
         """
         response = api.get(f"/api/risk/{portfolio.pk}/")
 
         assert response.status_code != 402
-        assert body(response)["error"]["code"] in {"missing_price_data", "insufficient_history"}
+        assert body(response)["error"]["code"] in {
+            "empty_portfolio",
+            "missing_price_data",
+            "insufficient_history",
+        }
 
 
 class TestUserHasUnlock:

@@ -285,6 +285,13 @@ export default function Dashboard({ portfolioId }) {
   // is wrong yet".
   if (error && !report) {
     const isEmpty = error.code === 'empty_portfolio'
+    // `empty_portfolio` now covers two situations, and they need different
+    // words. A portfolio with no rows in it names no tickers; one where every
+    // holding was excluded for want of prices names all of them. Telling a user
+    // with five holdings to "start your portfolio" would be nonsense, so the
+    // presence of `details.tickers` is what picks the copy.
+    const unpriced = isEmpty ? (error.details?.tickers ?? []) : []
+    const isAllUnpriced = unpriced.length > 0
 
     return (
       <main className="page page--centered">
@@ -293,12 +300,29 @@ export default function Dashboard({ portfolioId }) {
             <span className="empty__icon" aria-hidden="true">
               <PortfolioIcon />
             </span>
-            <p className="status__title">Start your portfolio</p>
-            <p className="status__detail">
-              There is nothing to measure yet. Add a position below — or import a CSV
-              of them — and the risk report, the value curve and the rebalance
-              suggestion all build themselves from it.
-            </p>
+            {isAllUnpriced ? (
+              <>
+                <p className="status__title">No prices for any of your holdings</p>
+                <p className="status__detail">
+                  Your positions are saved, but none of them has price data yet, so
+                  there is nothing to measure. This usually means the symbols are
+                  wrong or delisted — check the exchange suffix (RELIANCE.NS, not
+                  RELIANCE) and correct or remove them below.
+                </p>
+                <p className="status__detail status__detail--muted">
+                  Affected: {unpriced.join(', ')}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="status__title">Start your portfolio</p>
+                <p className="status__detail">
+                  There is nothing to measure yet. Add a position below — or import a
+                  CSV of them — and the risk report, the value curve and the rebalance
+                  suggestion all build themselves from it.
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="status status--error" role="alert">
@@ -378,6 +402,7 @@ export default function Dashboard({ portfolioId }) {
         <ManageHoldings portfolioId={portfolioId} onChanged={refreshAll} />
         <HoldingsTable
           holdings={report.portfolio?.holdings}
+          excluded={report.portfolio?.excluded}
           marketValue={report.portfolio?.market_value}
           holdingIds={holdingIds}
           onDelete={removeHolding}

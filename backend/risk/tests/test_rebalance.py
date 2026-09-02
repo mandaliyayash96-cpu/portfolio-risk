@@ -239,11 +239,14 @@ class TestFailureModes:
         with pytest.raises(EmptyPortfolioError):
             compute_rebalance(portfolio.pk)
 
-    def test_unfetched_ticker(self, portfolio, holding_factory):
+    def test_a_wholly_unpriceable_portfolio_is_empty(self, portfolio, holding_factory):
+        """Nothing to optimise over - see the note in test_services.py."""
         holding_factory("NEVER.NS", "10")
 
-        with pytest.raises(MissingPriceDataError):
+        with pytest.raises(EmptyPortfolioError) as caught:
             compute_rebalance(portfolio.pk)
+
+        assert caught.value.details == {"tickers": ["NEVER.NS"]}
 
     def test_short_history(self, portfolio, holding_factory):
         holding_factory("SHORT.NS", "10")
@@ -292,14 +295,17 @@ class TestEndpoint:
         assert response.status_code == 400
         assert response.json()["error"]["code"] == "empty_portfolio"
 
-    def test_missing_prices_is_a_422_envelope(self, client, portfolio, holding_factory):
+    def test_a_wholly_unpriceable_portfolio_is_a_400_envelope(
+        self, client, portfolio, holding_factory
+    ):
         holding_factory("NEVER.NS", "10")
 
         response = client.get(rebalance_url(portfolio.pk))
         body = response.json()
 
-        assert response.status_code == 422
-        assert body["error"]["code"] == "missing_price_data"
+        assert response.status_code == 400
+        assert body["error"]["code"] == "empty_portfolio"
+        assert "NEVER.NS" in body["error"]["message"]
         assert "fetch_prices" in body["error"]["message"]
 
     def test_short_history_is_a_422_envelope(self, client, portfolio, holding_factory):

@@ -28,8 +28,14 @@ Pipeline
                             ---> engine.build_report     (compute_risk)
                             ---> risk.optimizer          (compute_rebalance)
 
-Both endpoints share `_prepare()`, so they cannot disagree about the window,
-the valuation or the join.
+All three endpoints share `_prepare()`, so they cannot disagree about the
+window, the valuation or the join.
+
+`_prepare` also owns GRACEFUL DEGRADATION: a holding with no usable price data
+is excluded from the maths and reported in `warnings` and `excluded`, rather
+than failing the request. One dead ticker costs the user that ticker, not the
+whole dashboard. See `_Excluded` and `_prepare` for the rules and the two cases
+that are still fatal.
 """
 
 from __future__ import annotations
@@ -45,7 +51,6 @@ from common.exceptions import (
     EmptyPortfolioError,
     InsufficientHistoryError,
     InvalidInputError,
-    MissingPriceDataError,
     OptimizationError,
 )
 from marketdata.selectors import (
@@ -92,6 +97,51 @@ class _Position:
         return self.quantity * self.price
 
 
+#: Why a holding could not be measured. Two genuinely different gaps, kept
+#: apart because they have different fixes and the user deserves to be told
+#: which one they have.
+NO_PRICE = "no_price"  # nothing to value the position AT
+NO_HISTORY = "no_history"  # valued, but no series to compute returns FROM
+
+
+@dataclass(frozen=True)
+class _Excluded:
+    """
+    One holding the report had to leave out, and why.
+
+    This exists so that a dead ticker is a FOOTNOTE rather than a failure. It
+    used to be neither: a single unpriceable symbol raised MissingPriceDataError
+    out of `_prepare` and the entire dashboard - risk, performance, rebalance,
+    every chart - rendered as one error page. A portfolio of twenty positions
+    was unmeasurable because one of them had been delisted.
+
+    So the pipeline now measures what it can and reports what it could not. The
+    excluded holding keeps its row in the holdings table (marked, not hidden)
+    and is named in `warnings`; it is simply absent from the weights, the market
+    value and the returns matrix, because there is no honest number to put there.
+    """
+
+    ticker: str
+    quantity: Decimal
+    reason: str  # NO_PRICE or NO_HISTORY
+
+    @property
+    def detail(self) -> str:
+        """One sentence, for a client that wants to render this row on its own."""
+        if self.reason == NO_PRICE:
+            return "No stored price, so this position could not be valued."
+        return "No stored price history, so no return series could be built."
+
+    def as_dict(self) -> dict:
+        """Money-free, so no Decimal/str convention question arises."""
+        return {
+            "ticker": self.ticker,
+            "quantity": str(self.quantity),
+            "reason": self.reason,
+            "detail": self.detail,
+        }
+
+
 def compute_risk(
     portfolio_id: int,
     *,
@@ -114,19 +164,30 @@ def compute_risk(
         `engine.build_report`) plus three provenance keys added here, because
         the engine has no idea which portfolio it just measured:
 
-            "portfolio"  {id, name, base_currency, market_value, holdings[]}
+            "portfolio"  {id, name, base_currency, market_value, holdings[],
+                          excluded[]}
             "benchmark"  {ticker, included}
             "warnings"   list[str] - degradations the caller should see
+
+        `portfolio.holdings` is the MEASURED subset: every row has a price and
+        a weight, and the weights sum to 1. `portfolio.excluded` is what could
+        not be measured, each with a ticker, a quantity and a reason - and every
+        entry there is also described in `warnings`, so a client that renders
+        warnings and nothing else still tells the user what happened.
 
         Every value is JSON-safe: the engine guarantees no NaN/inf, and money
         is emitted as strings (common/MONEY.md).
 
     Raises:
         NotFoundError (404):            no such portfolio.
-        EmptyPortfolioError (400):      the portfolio holds nothing.
-        MissingPriceDataError (422):    a held ticker has no stored price/history.
+        EmptyPortfolioError (400):      the portfolio holds nothing, or nothing
+                                        in it could be priced (`details.tickers`
+                                        distinguishes the second from the first).
         InsufficientHistoryError (422): too little overlapping history.
         InvalidInputError (400):        the portfolio values at zero.
+
+    Does NOT raise for a holding with no price data. That used to fail the whole
+    report; it is now an exclusion - see `_prepare`.
     """
     prepared = _prepare(portfolio_id, days=days, min_observations=min_observations)
 
@@ -140,7 +201,7 @@ def compute_risk(
     )
 
     report["portfolio"] = _portfolio_block(
-        prepared.portfolio, prepared.positions, prepared.weights
+        prepared.portfolio, prepared.positions, prepared.weights, prepared.excluded
     )
     report["benchmark"] = {
         "ticker": prepared.benchmark_ticker or None,
@@ -187,8 +248,12 @@ def compute_rebalance(
         matching the risk report, so the two pages never disagree about units.
 
     Raises:
-        The same four as `compute_risk` (not found / empty / missing prices /
+        The same as `compute_risk` (not found / empty-or-unpriceable /
         insufficient history), plus OptimizationError (422) if a solve fails.
+
+    Holdings with no usable price data are excluded rather than fatal, exactly
+    as in the risk report, and appear in `excluded` and `warnings`. The
+    suggestion then covers the tickers it could actually measure.
     """
     prepared = _prepare(portfolio_id, days=days, min_observations=min_observations)
 
@@ -259,6 +324,10 @@ def compute_rebalance(
             "trading_days": trading_days,
             "n_points": int(n_points),
         },
+        # Holdings this suggestion does not cover, for the same reason the risk
+        # report lists them: an allocation over 4 of your 5 positions should say
+        # which one it left out.
+        "excluded": [entry.as_dict() for entry in prepared.excluded],
         "warnings": warnings,
     }
 
@@ -302,7 +371,7 @@ def compute_performance(
             max_drawdown  FRACTION and negative (-0.25 = a 25% fall), matching
                           the risk report's key of the same name; it equals
                           min(drawdown_series) / 100 by construction
-            start_value, observations, start, end, warnings
+            start_value, observations, start, end, excluded, warnings
 
         The three lists are parallel and equal-length, which is what lets the
         frontend zip them into one chart without an index lookup.
@@ -310,9 +379,10 @@ def compute_performance(
         Every value is JSON-safe: no NaN, no inf.
 
     Raises:
-        The same four as `compute_risk` - not found (404), empty portfolio
-        (400), missing price data (422), insufficient history (422) - because
-        all four originate in `_prepare`, which this shares.
+        The same as `compute_risk` - not found (404), empty or wholly
+        unpriceable portfolio (400), insufficient history (422) - because they
+        all originate in `_prepare`, which this shares. A holding with no price
+        data is excluded from the curve, not fatal to it.
     """
     prepared = _prepare(portfolio_id, days=days, min_observations=min_observations)
 
@@ -349,6 +419,7 @@ def compute_performance(
         "observations": len(values),
         "start": dates[0],
         "end": dates[-1],
+        "excluded": [entry.as_dict() for entry in prepared.excluded],
         "warnings": list(prepared.warnings),
     }
 
@@ -369,6 +440,9 @@ class _Prepared:
 
     portfolio: Portfolio
     positions: list[_Position]
+    #: Holdings left out of every number in this object. Never empty-by-design:
+    #: an empty list is the normal, healthy case.
+    excluded: list[_Excluded]
     weights: list[float]
     holding_returns: pd.DataFrame  # columns ordered to match `weights`
     benchmark_ticker: str
@@ -383,15 +457,62 @@ def _prepare(portfolio_id: int, *, days: int, min_observations: int) -> _Prepare
     """
     Portfolio -> valued positions -> weights -> aligned returns matrix.
 
-    Every DomainError the two endpoints raise about data originates here, which
-    is why they report identical messages for identical problems.
+    Every DomainError the three endpoints raise about data originates here,
+    which is why they report identical messages for identical problems.
+
+    GRACEFUL DEGRADATION
+    --------------------
+    Holdings that cannot be priced, or have no history to build returns from,
+    are EXCLUDED here rather than raised on. What survives is measured; what did
+    not is carried in `excluded` and named in `warnings`. One delisted symbol
+    therefore costs the user that symbol, not their dashboard.
+
+    The order matters. Positions are valued first, then filtered again by
+    whether a return series exists, and `_weights` runs on the SURVIVORS - so
+    the weights sum to 1 over what was actually measured, and the market value
+    in the report is the value of the measured subset. Weighting an excluded
+    position at zero instead would be arithmetically similar and a lie: it would
+    claim we valued something we could not price.
+
+    STILL FATAL
+    -----------
+    Two things. A portfolio with no holdings at all (`_value_positions`), and a
+    portfolio where NOTHING can be measured - handled below with the same
+    `empty_portfolio` code, because from the report's point of view those are
+    the same situation: there is no exposure it can describe. The message and
+    `details.tickers` tell the two apart.
+
+    NOT handled here, deliberately: a ticker with a very SHORT history still
+    shrinks the inner join for everyone and can trip `insufficient_history`
+    below. Excluding by "usable history" is a clean rule; choosing which subset
+    of tickers to drop to maximise an overlap window is a combinatorial guess
+    at what the user meant, and a wrong guess would silently change which
+    portfolio is being measured. That error names the tickers and stays honest.
     """
     portfolio = get_portfolio(portfolio_id)
-    positions = _value_positions(portfolio)
-    weights = _weights(positions)
+    positions, unpriced = _value_positions(portfolio)
 
     benchmark = (settings.DEFAULT_BENCHMARK_TICKER or "").strip().upper()
-    closes, warnings = _close_series(positions, benchmark, days)
+    closes, warnings, unhistoried = _close_series(positions, benchmark, days)
+
+    # Only the positions that have BOTH a price and a series survive. Rebuilt by
+    # membership in `closes` rather than by removing entries, so `positions` and
+    # the returns matrix cannot fall out of step - that pairing is what the
+    # weights vector's column order depends on.
+    positions = [position for position in positions if position.ticker in closes]
+    excluded = unpriced + unhistoried
+
+    if not positions:
+        symbols = sorted({entry.ticker for entry in excluded})
+        raise EmptyPortfolioError(
+            f"None of this portfolio's holdings could be priced "
+            f"({', '.join(symbols)}), so there is nothing to measure. "
+            f"{_FETCH_HINT}",
+            details={"tickers": symbols},
+        )
+
+    warnings = _exclusion_warnings(excluded) + warnings
+    weights = _weights(positions)
     returns = _returns_matrix(closes, min_observations)
 
     benchmark_included = bool(benchmark) and benchmark in returns.columns
@@ -405,6 +526,7 @@ def _prepare(portfolio_id: int, *, days: int, min_observations: int) -> _Prepare
     return _Prepared(
         portfolio=portfolio,
         positions=positions,
+        excluded=excluded,
         weights=weights,
         holding_returns=holding_returns,
         benchmark_ticker=benchmark,
@@ -415,6 +537,50 @@ def _prepare(portfolio_id: int, *, days: int, min_observations: int) -> _Prepare
         # The engine wants a PER-PERIOD rate; the setting is annualised.
         rf_per_period=float(settings.RISK_FREE_RATE) / trading_days,
     )
+
+
+def _exclusion_warnings(excluded: list[_Excluded]) -> list[str]:
+    """
+    The excluded holdings, as sentences a user can act on.
+
+    Grouped by REASON rather than one line per ticker: a portfolio re-imported
+    before `fetch_prices` has run can exclude a dozen symbols at once, and
+    twelve near-identical banners is not twelve times the information. Within a
+    group the tickers are sorted, so the same gap produces the same string on
+    every request and the frontend's `key={warning}` stays stable.
+
+    Both messages name the consequence ("excluded from this report") before the
+    cause, because the consequence is the part the reader did not already know.
+    """
+    grouped: dict[str, list[str]] = {}
+    for entry in excluded:
+        grouped.setdefault(entry.reason, []).append(entry.ticker)
+
+    messages = {
+        NO_PRICE: (
+            "no stored price, so {they} could not be valued and {are} left out "
+            "of the market value and the weights"
+        ),
+        NO_HISTORY: (
+            "no stored price history, so no return series could be built and "
+            "{they} {are} left out of every risk figure"
+        ),
+    }
+
+    warnings: list[str] = []
+    for reason, tickers in grouped.items():
+        symbols = sorted(set(tickers))
+        plural = len(symbols) > 1
+        clause = messages[reason].format(
+            they="they" if plural else "it",
+            are="are" if plural else "is",
+        )
+        warnings.append(
+            f"{', '.join(symbols)} excluded from this report - {clause}. "
+            f"{_FETCH_HINT} If the symbol is delisted or wrong, delete or "
+            f"correct the holding."
+        )
+    return warnings
 
 
 def _json_float(value) -> float:
@@ -463,13 +629,18 @@ def _annualise_return(per_period: float, trading_days: int) -> float:
 # ---------------------------------------------------------------------------
 # Valuation and weights - Decimal until the very last step
 # ---------------------------------------------------------------------------
-def _value_positions(portfolio: Portfolio) -> list[_Position]:
+def _value_positions(portfolio: Portfolio) -> tuple[list[_Position], list[_Excluded]]:
     """
     Price every holding, preferring the live snapshot over the last close.
 
     The fallback matters: `fetch_prices --skip-live`, or one symbol whose live
     leg failed, would otherwise make the whole endpoint unusable even though a
     perfectly good close is stored. `price_source` reports which was used.
+
+    Returns (priced, excluded). A holding with NEITHER a live price nor a stored
+    close cannot be valued at all, so it is set aside rather than raised on -
+    see `_Excluded` for why that changed. The only hard failure left here is a
+    portfolio with no holdings in it, which is a different fact entirely.
     """
     holdings: list[Holding] = list(get_holdings(portfolio.pk))
     if not holdings:
@@ -485,13 +656,15 @@ def _value_positions(portfolio: Portfolio) -> list[_Position]:
     closes = get_latest_closes([ticker for ticker in tickers if ticker not in live])
 
     positions: list[_Position] = []
-    missing: list[str] = []
+    excluded: list[_Excluded] = []
     for holding, ticker in zip(holdings, tickers):
         price, source = live.get(ticker), "live"
         if price is None:
             price, source = closes.get(ticker), "last_close"
         if price is None:
-            missing.append(ticker)
+            excluded.append(
+                _Excluded(ticker=ticker, quantity=holding.quantity, reason=NO_PRICE)
+            )
             continue
         positions.append(
             _Position(
@@ -502,14 +675,7 @@ def _value_positions(portfolio: Portfolio) -> list[_Position]:
             )
         )
 
-    if missing:
-        symbols = sorted(set(missing))
-        raise MissingPriceDataError(
-            f"No stored price for {', '.join(symbols)}, so the portfolio cannot "
-            f"be valued and weights cannot be computed. {_FETCH_HINT}",
-            details={"tickers": symbols},
-        )
-    return positions
+    return positions, excluded
 
 
 def _weights(positions: list[_Position]) -> list[float]:
@@ -540,32 +706,36 @@ def _weights(positions: list[_Position]) -> list[float]:
 # ---------------------------------------------------------------------------
 def _close_series(
     positions: list[_Position], benchmark: str, days: int
-) -> tuple[dict[str, pd.Series], list[str]]:
+) -> tuple[dict[str, pd.Series], list[str], list[_Excluded]]:
     """
     Load one close series per ticker, plus the benchmark's.
 
-    Returns (series_by_ticker, warnings). A missing HOLDING series is fatal: it
-    would silently drop a position out of the portfolio. A missing BENCHMARK is
-    not - every other metric is still valid, so beta degrades to null and the
-    reason is reported in `warnings` instead of failing the whole request.
+    Returns (series_by_ticker, warnings, excluded).
+
+    A HOLDING with no stored history used to be fatal, on the reasoning that
+    dropping it would silently remove a position from the portfolio. The
+    reasoning was right and the remedy was wrong: killing the whole report
+    removes ALL of them. It is now excluded and reported - loudly, in
+    `warnings`, and still visible in the holdings table - which drops it from
+    the maths without dropping it from the user's sight.
+
+    A missing BENCHMARK has always degraded rather than failed: every other
+    metric is still valid, so beta becomes null and the reason is a warning.
     """
     series: dict[str, pd.Series] = {}
-    missing: list[str] = []
+    excluded: list[_Excluded] = []
     for position in positions:
         frame = get_history_df(position.ticker, days)
         if frame.empty:
-            missing.append(position.ticker)
+            excluded.append(
+                _Excluded(
+                    ticker=position.ticker,
+                    quantity=position.quantity,
+                    reason=NO_HISTORY,
+                )
+            )
             continue
         series[position.ticker] = frame[CLOSE_COLUMN]
-
-    if missing:
-        symbols = sorted(set(missing))
-        raise MissingPriceDataError(
-            f"No stored price history for {', '.join(symbols)}, so no return "
-            f"series can be built for {'them' if len(symbols) > 1 else 'it'}. "
-            f"{_FETCH_HINT}",
-            details={"tickers": symbols},
-        )
 
     warnings: list[str] = []
     if benchmark and benchmark not in series:
@@ -578,7 +748,7 @@ def _close_series(
         else:
             series[benchmark] = frame[CLOSE_COLUMN]
 
-    return series, warnings
+    return series, warnings, excluded
 
 
 def _returns_matrix(closes: dict[str, pd.Series], min_observations: int) -> pd.DataFrame:
@@ -620,7 +790,10 @@ def _returns_matrix(closes: dict[str, pd.Series], min_observations: int) -> pd.D
 # Provenance
 # ---------------------------------------------------------------------------
 def _portfolio_block(
-    portfolio: Portfolio, positions: list[_Position], weights: list[float]
+    portfolio: Portfolio,
+    positions: list[_Position],
+    weights: list[float],
+    excluded: list[_Excluded],
 ) -> dict:
     """
     Which portfolio this is, and how it was valued.
@@ -628,13 +801,26 @@ def _portfolio_block(
     Money is serialised as `str` (common/MONEY.md): exact in transit, and it
     keeps a 4-decimal Decimal from arriving as 1234.5600000000001. Weights stay
     float - they are ratios, not money.
+
+    `holdings` is the MEASURED subset and keeps exactly the shape it always had,
+    so the allocation pie, the risk cards and the PDF's table need no changes -
+    every row in it still has a price, a market value and a weight that sums
+    with the others to 1.
+
+    `excluded` is the separate, additive answer to "then where did TATAMOTORS
+    go?". Kept out of `holdings` rather than mixed in with null prices, because
+    a consumer that iterated holdings and multiplied by weight would otherwise
+    have to learn about a row shape that cannot be arithmetic.
     """
     total = sum((position.market_value for position in positions), ZERO)
     return {
         "id": portfolio.pk,
         "name": portfolio.name,
         "base_currency": portfolio.base_currency,
+        # The value of what could be measured. When `excluded` is non-empty this
+        # is NOT the whole portfolio, and the warning says so in words.
         "market_value": str(total),
+        "excluded": [entry.as_dict() for entry in excluded],
         "holdings": [
             {
                 "ticker": position.ticker,

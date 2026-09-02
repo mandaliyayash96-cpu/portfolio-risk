@@ -43,6 +43,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
@@ -127,6 +128,99 @@ def _clean_ticker(value) -> str:
             details={"field": "ticker", "value": ticker},
         )
     return ticker
+
+
+#: A symbol that carries no exchange suffix and is shaped like a plain equity
+#: code: letters and digits, optionally an ampersand (M&M). Deliberately does
+#: NOT match anything containing "-", because that is the shape of the pairs
+#: yfinance uses for crypto and FX (BTC-USD), where no suffix is expected and a
+#: hint would be noise.
+_BARE_SYMBOL = re.compile(r"^[A-Z][A-Z0-9&]{0,14}$")
+
+#: What we would suggest. The app is INR-denominated and NSE-focused, so this
+#: is the suffix a suffix-less Indian symbol is nearly always missing.
+_DEFAULT_SUFFIX = ".NS"
+
+
+def _suffix_hint(ticker: str) -> str | None:
+    """
+    Warn about a missing exchange suffix, without ever changing the symbol.
+
+    "TCS" is a real and common mistake: it is a valid yfinance symbol (Tata
+    Consultancy's US-listed ADR is not it - "TCS" resolves to Container Store),
+    so it fetches, stores prices, and quietly measures the wrong company. That
+    is worse than a symbol that fails, because nothing about the dashboard looks
+    broken afterwards.
+
+    NOT auto-corrected, and that is the whole design. Rewriting "TCS" to
+    "TCS.NS" would be right most of the time and silently wrong the rest, and a
+    holding the user did not type is not one they can debug. So the symbol is
+    saved exactly as given and the doubt is handed back to them.
+
+    Returns None for anything already carrying a suffix, and for shapes where
+    the question does not arise.
+    """
+    if "." in ticker or not _BARE_SYMBOL.match(ticker):
+        return None
+    return (
+        f"{ticker} has no exchange suffix - did you mean {ticker}{_DEFAULT_SUFFIX}? "
+        f"Indian listings need it; leave it as-is if this is a US symbol."
+    )
+
+
+def _unverified_tickers(tickers: list[str]) -> set[str]:
+    """
+    Which of these the risk report still cannot use, after any fetch has run.
+
+    "Unverified" is defined against STORED HISTORY rather than against whether
+    the fetch raised, because that is the condition the report actually applies
+    (`risk.services._close_series`). A symbol whose fetch failed and a symbol
+    nobody ever fetched are the same problem from the dashboard's side, and
+    both should be flagged the moment the holding is saved rather than
+    discovered later - which, before the exclusion safeguard landed, meant
+    discovering it as a dead dashboard.
+
+    One query for the whole batch, so an import does not pay per row.
+    """
+    fresh, _known = _new_tickers(tickers)
+    return set(fresh)
+
+
+def _entry_warning(*parts: str | None) -> str | None:
+    """
+    Fold the hints about one saved row into the single `warning` string the
+    API has always returned. None when there is nothing to say.
+    """
+    said = [part for part in parts if part]
+    return " ".join(said) if said else None
+
+
+def _annotate_saved_rows(
+    results: list[dict], price_warnings: dict[str, str], saved: list[str]
+) -> None:
+    """
+    Attach `warning` and `unverified` to every row an import actually wrote.
+
+    Shared by the CSV importer and the broker importer because their reports
+    have the same shape and should not be able to drift into describing a saved
+    row two different ways. Mutates `results` in place - it is a local list
+    being finished off, not a value being passed around.
+
+    SKIPPED rows are left alone: they already carry the `reason` they were
+    rejected, and a row that was never written has nothing to be unverified
+    about. `unverified` is set to False on them explicitly rather than left
+    absent, so a client can read the key on every row without checking.
+    """
+    unverified = _unverified_tickers(saved) if saved else set()
+    for entry in results:
+        if entry["status"] == SKIPPED:
+            entry["unverified"] = False
+            continue
+        ticker = entry["ticker"]
+        entry["warning"] = _entry_warning(
+            _suffix_hint(ticker), price_warnings.get(ticker)
+        )
+        entry["unverified"] = ticker in unverified
 
 
 def _positive_decimal(value, *, field: str, quant: Decimal, max_digits: int) -> Decimal:
@@ -421,10 +515,16 @@ def add_holding(
         provider: market data provider override, mainly for tests.
 
     Returns:
-        The serialised holding plus two keys the caller needs and the row
+        The serialised holding plus three keys the caller needs and the row
         itself does not carry:
             "created" - True if this added a position, False if it replaced one
-            "warning" - None, or why this ticker has no prices yet
+            "warning" - None, or what is doubtful about this symbol: a missing
+                        exchange suffix, prices that could not be fetched, or
+                        both, in one string
+            "unverified" - True when nothing in the price tables can value this
+                        symbol yet. The row IS saved either way; this is the
+                        flag that lets the UI say so immediately rather than
+                        letting the user find out from the risk report later
 
     Raises:
         NotFoundError (404):    no such portfolio.
@@ -460,7 +560,11 @@ def add_holding(
 
     payload = serialize_holding(holding)
     payload["created"] = created
-    payload["warning"] = warnings.get(symbol)
+    # Two independent doubts about this symbol, folded into one line: it may be
+    # missing an exchange suffix, and it may have no prices behind it. Either
+    # can be true without the other.
+    payload["warning"] = _entry_warning(_suffix_hint(symbol), warnings.get(symbol))
+    payload["unverified"] = symbol in _unverified_tickers([symbol])
     return payload
 
 
@@ -645,9 +749,13 @@ def import_holdings_csv(
             total_rows  - data rows seen, blanks excluded
             added / updated / skipped  - counts
             results     - one entry per row:
-                          {row, ticker, status, reason, warning}
+                          {row, ticker, status, reason, warning, unverified}
                           `row` is the line number in the file, so it matches
                           what the user sees in their spreadsheet.
+                          `warning` names a missing exchange suffix and/or a
+                          price fetch that failed; `unverified` is True when
+                          the risk report still has no history to value that
+                          symbol with. Both are False/None on a skipped row.
             price_fetch - {"attempted": bool, "warnings": {ticker: message}}
 
     Raises:
@@ -746,13 +854,10 @@ def import_holdings_csv(
 
     # Committed. Prices are warmed after, and only for what actually landed.
     warnings: dict[str, str] = {}
+    saved = [entry["fields"]["ticker"] for entry in accepted]
     if fetch_prices and accepted:
-        warnings = fetch_prices_for(
-            [entry["fields"]["ticker"] for entry in accepted], provider=provider
-        )
-        for entry in results:
-            if entry["status"] in (ADDED, UPDATED):
-                entry["warning"] = warnings.get(entry["ticker"])
+        warnings = fetch_prices_for(saved, provider=provider)
+    _annotate_saved_rows(results, warnings, saved)
 
     counts = {ADDED: 0, UPDATED: 0, SKIPPED: 0}
     for entry in results:
@@ -839,6 +944,9 @@ def import_broker_holdings(
                             without re-deriving it from the outcome.
         `row` in each result is the position's place in the broker's statement
         (1-based), which is the nearest honest equivalent of a CSV line number.
+        Each result also carries `warning` and `unverified`, exactly as a CSV
+        row does - a sample symbol with no stored prices is flagged the same
+        way a hand-typed one is.
 
     Raises:
         NotFoundError (404):     no such portfolio.
@@ -922,13 +1030,10 @@ def import_broker_holdings(
 
     # Committed. Prices are warmed after, and only for what actually landed.
     warnings: dict[str, str] = {}
+    saved = [entry["fields"]["ticker"] for entry in accepted]
     if fetch_prices and accepted:
-        warnings = fetch_prices_for(
-            [entry["fields"]["ticker"] for entry in accepted], provider=provider
-        )
-        for entry in results:
-            if entry["status"] in (ADDED, UPDATED):
-                entry["warning"] = warnings.get(entry["ticker"])
+        warnings = fetch_prices_for(saved, provider=provider)
+    _annotate_saved_rows(results, warnings, saved)
 
     counts = {ADDED: 0, UPDATED: 0, SKIPPED: 0}
     for entry in results:

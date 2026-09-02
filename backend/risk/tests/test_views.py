@@ -77,14 +77,21 @@ class TestFailureEnvelopes:
         assert error["code"] == "empty_portfolio"
         assert "no holdings" in error["message"]
 
-    def test_unfetched_ticker_is_422_naming_fetch_prices(
+    def test_a_wholly_unpriceable_portfolio_is_a_400_naming_the_ticker(
         self, client, portfolio, holding_factory
     ):
+        """
+        The only holding has no prices, so there is nothing left to measure.
+
+        A PARTLY unpriceable portfolio is a very different answer - a 200 with
+        the rest of the report and a warning. That is the case this whole
+        feature exists for, and it is asserted in test_services.py.
+        """
         holding_factory("NEVER.NS", "10")
 
-        error = self._error(client, portfolio.pk, 422)
+        error = self._error(client, portfolio.pk, 400)
 
-        assert error["code"] == "missing_price_data"
+        assert error["code"] == "empty_portfolio"
         assert "fetch_prices" in error["message"]
         assert error["details"] == {"tickers": ["NEVER.NS"]}
 

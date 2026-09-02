@@ -6,10 +6,16 @@ maths. It takes an id off the URL, calls the service, and hands the dict back.
 
 The envelope is not built here either - `common.renderers.EnvelopeJSONRenderer`
 wraps the success case and `common.exceptions.custom_exception_handler` wraps
-every DomainError the service raises, so all four failure modes
-(not_found / empty_portfolio / missing_price_data / insufficient_history)
-arrive as {"success": false, "data": null, "error": {...}} with the right
+every DomainError the service raises, so every failure mode
+(not_found / empty_portfolio / insufficient_history / optimization_failed)
+arrives as {"success": false, "data": null, "error": {...}} with the right
 status code, never as a 500.
+
+A holding with no price data is NOT among them any more. It used to be
+`missing_price_data`, and it took the whole dashboard down with it; the service
+now excludes such a holding, reports it in `warnings`, and answers 200 with the
+rest of the portfolio. Only a portfolio where NOTHING can be priced still
+fails, as `empty_portfolio`.
 
 WHOSE PORTFOLIO IS BEING READ
 -----------------------------
@@ -136,8 +142,10 @@ def risk_report_pdf(request, portfolio_id: int):
     try:
         report = compute_risk(resolve_portfolio_id(request, portfolio_id))
     except DomainError as exc:
-        # not_found (404) / empty_portfolio (400) / missing_price_data (422) /
-        # insufficient_history (422) - the same four the JSON endpoint raises.
+        # not_found (404) / empty_portfolio (400) / insufficient_history (422)
+        # - the same set the JSON endpoint raises. A partly unpriceable
+        # portfolio does not come through here at all: it renders a PDF, with
+        # the exclusions printed in the warnings block.
         return JsonResponse(
             envelope(error=error_payload(exc.code, exc.message, exc.details)),
             status=exc.status_code,

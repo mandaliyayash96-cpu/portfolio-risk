@@ -1026,6 +1026,24 @@ a {
   border-bottom: 0;
 }
 
+/* An excluded holding: present, legible, and visibly not part of the maths.
+   Muted rather than hidden - the whole point of rendering it is that the user
+   can see the dead ticker and delete it. The ticker itself keeps full contrast
+   so the row stays scannable; only the empty cells recede. */
+.table__row--excluded td {
+  color: var(--ink-faint);
+}
+
+.table__row--excluded .table__ticker {
+  color: var(--ink-muted);
+}
+
+/* The "N excluded from risk" note in the panel subtitle. */
+.holdings__excluded-count {
+  color: var(--bad);
+  font-weight: 600;
+}
+
 .table__num {
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -1116,6 +1134,21 @@ a {
   background: var(--warn-wash);
   border-color: var(--warn-border);
   color: var(--warn);
+}
+
+/* A holding the risk report could not price at all. Red rather than amber:
+   "last close" is a degraded answer, this is no answer, and the two must not
+   read as the same severity. */
+.tag--dead {
+  background: var(--bad-wash);
+  border-color: var(--bad-border);
+  color: var(--bad);
+}
+
+/* An import row's status cell can carry a second pill - "added" plus
+   "Unverified" - and two pills flush against each other read as one. */
+.table td > .pill + .pill {
+  margin-left: var(--space-2);
 }
 
 .pill--good {

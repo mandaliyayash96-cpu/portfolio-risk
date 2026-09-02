@@ -17,11 +17,15 @@ from common.exceptions import (
     EmptyPortfolioError,
     InsufficientHistoryError,
     InvalidInputError,
-    MissingPriceDataError,
     NotFoundError,
 )
 from marketdata.models import PriceHistory
-from risk.services import MIN_OBSERVATIONS, compute_risk
+from risk.services import (
+    MIN_OBSERVATIONS,
+    compute_performance,
+    compute_rebalance,
+    compute_risk,
+)
 
 from .conftest import BENCHMARK, make_history, make_snapshot
 
@@ -231,23 +235,41 @@ class TestFailureModes:
         assert caught.value.status_code == 400
         assert "no holdings" in caught.value.message
 
-    def test_ticker_never_fetched(self, portfolio, holding_factory):
+    def test_every_ticker_unpriced_is_the_empty_portfolio_error(
+        self, portfolio, holding_factory
+    ):
+        """
+        Nothing could be valued, so there is nothing to measure.
+
+        This is the ONLY remaining hard failure for missing prices, and it is
+        deliberately the same code as a portfolio with no rows in it: from the
+        report's point of view both mean "no exposure I can describe". The
+        message and `details.tickers` are what tell them apart - an empty
+        portfolio names none.
+        """
         holding_factory("NEVER.NS", "10")
 
-        with pytest.raises(MissingPriceDataError) as caught:
+        with pytest.raises(EmptyPortfolioError) as caught:
             compute_risk(portfolio.pk)
 
-        assert caught.value.code == "missing_price_data"
-        assert caught.value.status_code == 422
+        assert caught.value.code == "empty_portfolio"
+        assert caught.value.status_code == 400
         assert "fetch_prices" in caught.value.message
+        assert "NEVER.NS" in caught.value.message
         assert caught.value.details == {"tickers": ["NEVER.NS"]}
 
-    def test_ticker_with_a_snapshot_but_no_history(self, portfolio, holding_factory):
-        """A live poll ran but the history leg never did."""
+    def test_every_ticker_has_a_snapshot_but_no_history(self, portfolio, holding_factory):
+        """
+        A live poll ran but the history leg never did.
+
+        Priceable but not measurable: the position can be valued, and still has
+        no return series, so it is excluded for the OTHER reason - and with it
+        gone nothing remains.
+        """
         holding_factory("RELIANCE.NS", "100")
         make_snapshot("RELIANCE.NS", "1000.0000")
 
-        with pytest.raises(MissingPriceDataError) as caught:
+        with pytest.raises(EmptyPortfolioError) as caught:
             compute_risk(portfolio.pk)
 
         assert "fetch_prices" in caught.value.message
@@ -316,3 +338,165 @@ class TestTickerNormalisation:
         assert report["portfolio"]["holdings"][0]["market_value"] == str(
             Decimal("100.000000") * Decimal("1000.0000")
         )
+
+
+# ---------------------------------------------------------------------------
+# Graceful degradation
+#
+# The safeguard this module exists to provide: ONE dead ticker must cost the
+# user that ticker, not the dashboard. Before this, a single delisted symbol in
+# a twenty-position portfolio raised MissingPriceDataError out of `_prepare`
+# and every panel on the page rendered as one error.
+#
+# The tests below therefore all follow the same shape - take a portfolio that
+# works, break exactly one holding in it, and assert the report still comes
+# back describing the rest.
+# ---------------------------------------------------------------------------
+class TestGracefulDegradation:
+    def test_one_dead_ticker_still_returns_a_report_for_the_rest(
+        self, funded_portfolio, holding_factory
+    ):
+        """The headline case. Two good holdings, one delisted, one report."""
+        holding_factory("TATAMOTORS.NS", "10")  # no prices, no history
+
+        report = compute_risk(funded_portfolio.pk)
+
+        assert report["tickers"] == ["RELIANCE.NS", "TCS.NS"]
+        assert report["annualized_volatility"] > 0
+        assert [entry["ticker"] for entry in report["portfolio"]["excluded"]] == [
+            "TATAMOTORS.NS"
+        ]
+
+    def test_the_exclusion_is_named_in_a_warning(self, funded_portfolio, holding_factory):
+        holding_factory("TATAMOTORS.NS", "10")
+
+        report = compute_risk(funded_portfolio.pk)
+
+        warning = " ".join(report["warnings"])
+        assert "TATAMOTORS.NS" in warning
+        assert "excluded" in warning
+
+    def test_weights_renormalise_over_the_survivors(
+        self, funded_portfolio, holding_factory
+    ):
+        """
+        The dead holding is dropped, not weighted at zero.
+
+        Those are arithmetically similar and morally different: a zero weight
+        would claim we valued a position we could not price. The surviving 50/50
+        pair must still read 50/50.
+        """
+        holding_factory("TATAMOTORS.NS", "10")
+
+        report = compute_risk(funded_portfolio.pk)
+
+        weights = report["portfolio"]["holdings"]
+        assert len(weights) == 2
+        assert sum(row["weight"] for row in weights) == pytest.approx(1.0)
+        assert all(row["weight"] == pytest.approx(0.5) for row in weights)
+
+    def test_market_value_counts_only_what_was_valued(
+        self, funded_portfolio, holding_factory
+    ):
+        """100,000 + 100,000, and nothing for the position we could not price."""
+        holding_factory("TATAMOTORS.NS", "10")
+
+        report = compute_risk(funded_portfolio.pk)
+
+        assert Decimal(report["portfolio"]["market_value"]) == Decimal("200000.000000")
+
+    def test_the_excluded_holding_carries_its_quantity_and_a_reason(
+        self, funded_portfolio, holding_factory
+    ):
+        """
+        The frontend renders this row in the holdings table, so it needs enough
+        to render: what you hold, and why there is no number beside it.
+        """
+        holding_factory("TATAMOTORS.NS", "10")
+
+        excluded = compute_risk(funded_portfolio.pk)["portfolio"]["excluded"][0]
+
+        assert excluded["ticker"] == "TATAMOTORS.NS"
+        assert Decimal(excluded["quantity"]) == Decimal("10")
+        assert excluded["reason"] == "no_price"
+        assert excluded["detail"]
+
+    def test_a_priced_holding_with_no_history_is_excluded_for_the_other_reason(
+        self, funded_portfolio, holding_factory
+    ):
+        """
+        Valued, but unmeasurable. A live snapshot with no history behind it can
+        price the position and cannot produce a single return, so it is dropped
+        from the maths - and reported as a different gap, because the fix is
+        different.
+        """
+        holding_factory("IPOSTOCK.NS", "10")
+        make_snapshot("IPOSTOCK.NS", "500.0000")
+
+        report = compute_risk(funded_portfolio.pk)
+
+        excluded = report["portfolio"]["excluded"]
+        assert [entry["ticker"] for entry in excluded] == ["IPOSTOCK.NS"]
+        assert excluded[0]["reason"] == "no_history"
+        assert report["tickers"] == ["RELIANCE.NS", "TCS.NS"]
+
+    def test_several_dead_tickers_are_grouped_into_one_warning(
+        self, funded_portfolio, holding_factory
+    ):
+        """Twelve banners for one missing fetch is not twelve times the news."""
+        holding_factory("DEAD1.NS", "10")
+        holding_factory("DEAD2.NS", "10")
+
+        report = compute_risk(funded_portfolio.pk)
+
+        unpriced = [
+            warning for warning in report["warnings"] if "DEAD1.NS" in warning
+        ]
+        assert len(unpriced) == 1
+        assert "DEAD2.NS" in unpriced[0]
+
+    def test_a_healthy_portfolio_excludes_nothing_and_warns_about_nothing(
+        self, funded_portfolio
+    ):
+        """The safeguard must be invisible when there is nothing wrong."""
+        report = compute_risk(funded_portfolio.pk)
+
+        assert report["portfolio"]["excluded"] == []
+        assert report["warnings"] == []
+
+    def test_rebalance_degrades_the_same_way(self, funded_portfolio, holding_factory):
+        holding_factory("TATAMOTORS.NS", "10")
+
+        result = compute_rebalance(funded_portfolio.pk)
+
+        assert result["tickers"] == ["RELIANCE.NS", "TCS.NS"]
+        assert [entry["ticker"] for entry in result["excluded"]] == ["TATAMOTORS.NS"]
+        assert any("TATAMOTORS.NS" in warning for warning in result["warnings"])
+
+    def test_performance_degrades_the_same_way(self, funded_portfolio, holding_factory):
+        holding_factory("TATAMOTORS.NS", "10")
+
+        result = compute_performance(funded_portfolio.pk)
+
+        assert len(result["equity_curve"]) > 0
+        assert [entry["ticker"] for entry in result["excluded"]] == ["TATAMOTORS.NS"]
+        assert any("TATAMOTORS.NS" in warning for warning in result["warnings"])
+
+    def test_the_endpoint_answers_200_not_an_error_envelope(
+        self, client, funded_portfolio, holding_factory
+    ):
+        """
+        End to end: the dashboard's actual complaint was a red error page.
+
+        A 200 carrying warnings is the whole fix - the frontend already renders
+        `warnings` as non-blocking banners above a fully drawn dashboard.
+        """
+        holding_factory("TATAMOTORS.NS", "10")
+
+        response = client.get(f"/api/risk/{funded_portfolio.pk}/")
+        body = response.json()
+
+        assert response.status_code == 200
+        assert body["success"] is True
+        assert body["error"] is None
+        assert any("TATAMOTORS.NS" in warning for warning in body["data"]["warnings"])

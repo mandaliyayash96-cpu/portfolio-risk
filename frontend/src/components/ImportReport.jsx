@@ -54,9 +54,17 @@ export default function ImportReport({ report }) {
                   <th scope="row" className="table__ticker">{row.ticker ?? '--'}</th>
                   <td>
                     <span className={STATUS_CLASS[row.status] ?? 'pill'}>{row.status}</span>
+                    {/* A saved row the risk report cannot use yet. Beside the
+                        status rather than in the detail column, because it is
+                        the row's standing, not an explanation of it. */}
+                    {row.unverified && (
+                      <span className="pill pill--bad" title="No price data yet">
+                        Unverified
+                      </span>
+                    )}
                   </td>
                   {/* reason explains a skip, warning explains a row that saved
-                      without prices. Only one is ever set. */}
+                      with something doubtful about it. Only one is ever set. */}
                   <td className="manage__reason">{row.reason ?? row.warning ?? '--'}</td>
                 </tr>
               ))}

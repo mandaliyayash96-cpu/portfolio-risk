@@ -60,6 +60,7 @@ class TestPerformanceShape:
             "observations",
             "start",
             "end",
+            "excluded",
             "warnings",
         }
 
@@ -218,11 +219,24 @@ class TestFailureModes:
         with pytest.raises(EmptyPortfolioError):
             compute_performance(portfolio.pk)
 
-    def test_ticker_never_fetched(self, portfolio, holding_factory):
+    def test_a_wholly_unpriceable_portfolio_is_empty_not_missing_prices(
+        self, portfolio, holding_factory
+    ):
+        """
+        One holding, no prices for it: nothing survives, so there is no curve.
+
+        This used to raise MissingPriceDataError. It now raises the empty-
+        portfolio error, because "every holding was excluded" and "there are no
+        holdings" leave the endpoint in the same place - with no exposure to
+        plot. The ticker is named in `details` so the two can still be told
+        apart by a caller that cares.
+        """
         holding_factory("NOPRICE.NS", "10")
 
-        with pytest.raises(MissingPriceDataError):
+        with pytest.raises(EmptyPortfolioError) as caught:
             compute_performance(portfolio.pk)
+
+        assert caught.value.details == {"tickers": ["NOPRICE.NS"]}
 
     def test_too_few_overlapping_observations(self, portfolio, holding_factory):
         holding_factory("SHORT.NS", "10")
@@ -282,13 +296,14 @@ class TestFailureEnvelopes:
     def test_empty_portfolio_is_400(self, client, portfolio):
         assert self._error(client, portfolio.pk, 400)["code"] == "empty_portfolio"
 
-    def test_unfetched_ticker_is_422_naming_fetch_prices(
+    def test_a_wholly_unpriceable_portfolio_is_a_400_naming_the_ticker(
         self, client, portfolio, holding_factory
     ):
         holding_factory("NOPRICE.NS", "10")
-        error = self._error(client, portfolio.pk, 422)
+        error = self._error(client, portfolio.pk, 400)
 
-        assert error["code"] == "missing_price_data"
+        assert error["code"] == "empty_portfolio"
+        assert "NOPRICE.NS" in error["message"]
         assert "fetch_prices" in error["message"]
 
     def test_short_history_is_422_insufficient(self, client, portfolio, holding_factory):

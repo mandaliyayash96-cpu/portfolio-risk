@@ -260,7 +260,10 @@ def evaluate_rules(portfolio_id: int, *, report: dict | None = None) -> list[Bre
 
     Raises:
         Whatever `compute_risk` raises when it has to be called: NotFoundError,
-        EmptyPortfolioError, MissingPriceDataError, InsufficientHistoryError.
+        EmptyPortfolioError, InsufficientHistoryError. (A portfolio with SOME
+        unpriceable holdings no longer raises at all - `compute_risk` excludes
+        them and measures the rest, so a rule is evaluated against the
+        holdings that could be valued.)
         These are deliberately NOT swallowed - "we could not measure this
         portfolio" is a different fact from "this portfolio is fine", and the
         scan command reports them per portfolio rather than letting a data gap

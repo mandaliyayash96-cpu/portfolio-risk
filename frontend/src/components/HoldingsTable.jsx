@@ -6,6 +6,17 @@
  * the most recent stored close was used instead. A judge asking "how current is
  * this?" should be able to see the answer, not be told it.
  *
+ * TWO KINDS OF ROW
+ * ----------------
+ * The report hands back two lists: the positions it measured, and the ones it
+ * could not price. Both are rendered here, because the second kind is exactly
+ * the row a user needs to see and act on - it is the delisted ticker, or the
+ * typo. The measured rows carry a price and a weight; the excluded ones carry a
+ * "No price" tag and dashes, and they keep their delete button.
+ *
+ * The totals row describes the measured half only, and says so when there is a
+ * difference.
+ *
  * WHERE THE DELETE BUTTON'S ID COMES FROM
  * ---------------------------------------
  * These rows come from the risk report, which describes a VALUATION - it has no
@@ -37,8 +48,50 @@ const SOURCE_LABELS = {
   last_close: { text: 'Last close', className: 'tag tag--stale' },
 }
 
+/** What the em dash stands in for in an excluded row: nothing we could compute. */
+const NOT_APPLICABLE = '--'
+
+/**
+ * The delete cell, shared by both kinds of row.
+ *
+ * Extracted rather than written twice: an excluded position needs this button
+ * MORE than a measured one does - deleting the dead ticker is the fix for the
+ * warning above the dashboard - so the two must not be able to drift apart.
+ *
+ * Renders an empty cell when the row's id has not arrived from
+ * /api/portfolio/<id>/holdings/ yet, which is better than a button that cannot
+ * work. See the note at the top of this file on where the ids come from.
+ */
+function DeleteCell({ ticker, holdingId, deleting, onDelete }) {
+  return (
+    <td className="table__actions">
+      {holdingId ? (
+        <button
+          type="button"
+          className="button button--icon"
+          onClick={() => onDelete(ticker)}
+          disabled={deleting !== null}
+          title={`Delete ${ticker}`}
+        >
+          {deleting === ticker ? '…' : '✕'}
+          <span className="visually-hidden">Delete {ticker}</span>
+        </button>
+      ) : null}
+    </td>
+  )
+}
+
 export default function HoldingsTable({
   holdings = [],
+  // Positions the risk report could not measure. They are NOT in `holdings` -
+  // the backend keeps the measured subset separate so that everything with a
+  // weight really has one - so they are rendered here as their own rows.
+  //
+  // Showing them is the point. Dropping an unpriceable position from this table
+  // would leave the user with a portfolio that quietly lost a holding and no
+  // way to act on it; showing it, marked, with its delete button intact, is
+  // what makes "correct or remove the dead ticker" a thing they can actually do.
+  excluded = [],
   marketValue,
   // Both optional: with neither, this renders exactly the read-only table it
   // was before, which is what keeps the delete column from being load-bearing.
@@ -73,12 +126,22 @@ export default function HoldingsTable({
     }
   }
 
+  const total = holdings.length + excluded.length
+
   return (
     <section className="panel">
       <div className="panel__head">
         <h2 className="panel__title">Holdings</h2>
         <p className="panel__subtitle">
-          {holdings.length} position{holdings.length === 1 ? '' : 's'}
+          {total} position{total === 1 ? '' : 's'}
+          {excluded.length > 0 && (
+            <>
+              {' · '}
+              <span className="holdings__excluded-count">
+                {excluded.length} excluded from risk
+              </span>
+            </>
+          )}
         </p>
       </div>
       {error && (
@@ -87,7 +150,7 @@ export default function HoldingsTable({
         </p>
       )}
 
-      {holdings.length === 0 ? (
+      {total === 0 ? (
         <div className="empty">
           <span className="empty__icon" aria-hidden="true">
             <EmptyIcon />
@@ -145,20 +208,51 @@ export default function HoldingsTable({
                     </div>
                   </td>
                   {canDelete && (
-                    <td className="table__actions">
-                      {holdingId ? (
-                        <button
-                          type="button"
-                          className="button button--icon"
-                          onClick={() => remove(holding.ticker)}
-                          disabled={deleting !== null}
-                          title={`Delete ${holding.ticker}`}
-                        >
-                          {deleting === holding.ticker ? '…' : '✕'}
-                          <span className="visually-hidden">Delete {holding.ticker}</span>
-                        </button>
-                      ) : null}
-                    </td>
+                    <DeleteCell
+                      ticker={holding.ticker}
+                      holdingId={holdingId}
+                      deleting={deleting}
+                      onDelete={remove}
+                    />
+                  )}
+                </tr>
+              )
+            })}
+
+            {/* The unmeasurable positions, after the measured ones. Same
+                columns, so the ticker and quantity still line up; every cell
+                the report could not fill reads "--" rather than 0, because a
+                zero here would be a number we do not have. */}
+            {excluded.map((holding) => {
+              const holdingId = holdingIds[holding.ticker]
+              return (
+                <tr key={holding.ticker} className="table__row--excluded">
+                  <th scope="row" className="table__ticker">{holding.ticker}</th>
+                  <td className="table__num">{quantity(holding.quantity)}</td>
+                  <td className="table__num">{NOT_APPLICABLE}</td>
+                  <td>
+                    {/* The detail is the tooltip rather than a column: it is a
+                        sentence, and it would wreck the row rhythm inline. */}
+                    <span className="tag tag--dead" title={holding.detail}>
+                      No price
+                    </span>
+                  </td>
+                  <td className="table__num">{NOT_APPLICABLE}</td>
+                  <td className="table__num">
+                    <span className="table__weight-value">
+                      {NOT_APPLICABLE}
+                      <span className="visually-hidden">
+                        {' '}excluded from the risk report
+                      </span>
+                    </span>
+                  </td>
+                  {canDelete && (
+                    <DeleteCell
+                      ticker={holding.ticker}
+                      holdingId={holdingId}
+                      deleting={deleting}
+                      onDelete={remove}
+                    />
                   )}
                 </tr>
               )
@@ -166,7 +260,11 @@ export default function HoldingsTable({
           </tbody>
           <tfoot>
             <tr>
-              <th scope="row">Total</th>
+              {/* Named honestly when it is a subtotal. The market value and the
+                  100% both describe the MEASURED rows only, so calling it
+                  "Total" beside two excluded positions would be a small lie in
+                  the one place a reader checks their arithmetic. */}
+              <th scope="row">{excluded.length > 0 ? 'Total (valued)' : 'Total'}</th>
               <td colSpan={3} />
               <td className="table__num">{money(marketValue)}</td>
               <td className="table__num">100.0%</td>
