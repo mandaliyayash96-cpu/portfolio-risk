@@ -55,7 +55,11 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-APP_NAME = "Investor Portfolio Monitoring & Risk Management"
+#: The brand mark as it appears in the document. Rendered in three places, all
+#: user-visible: the eyebrow above "Risk Report" on page one, the footer rule on
+#: every page, and the PDF's `author` metadata. The stacked header therefore
+#: reads "Clarisk" over "Risk Report" - the brand, then what the document is.
+APP_NAME = "Clarisk"
 
 #: Placeholder for a value the report could not compute - beta with no
 #: benchmark stored, or a matrix cell that came back non-finite. An empty cell

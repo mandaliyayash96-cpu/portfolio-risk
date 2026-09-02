@@ -40,6 +40,6 @@ urlpatterns = [
     path("api/alerts/", include("alerts.urls")),
 ]
 
-admin.site.site_header = "Portfolio Risk Admin"
-admin.site.site_title = "Portfolio Risk"
-admin.site.index_title = "Investor Portfolio Monitoring & Risk Management"
+admin.site.site_header = "Clarisk Admin"
+admin.site.site_title = "Clarisk"
+admin.site.index_title = "See your risk clearly."
