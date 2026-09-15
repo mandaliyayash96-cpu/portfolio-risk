@@ -86,6 +86,13 @@
   --bad-wash: #fff1f2;
   --bad-border: #fecdd3;
 
+  /* Informational blue: a fourth tone that carries no verdict. Used by the
+     insights panel for diversification notes, which are neither good nor bad
+     on their own and must not read as either. */
+  --info: #1d4ed8;
+  --info-wash: #eff6ff;
+  --info-border: #bfdbfe;
+
   /* A neutral categorical accent for the one place that must differ from the
      brand without carrying risk meaning (weight decreases on the rebalance). */
   --violet: #7c3aed;
@@ -146,6 +153,10 @@
   --bad: #fb7185;
   --bad-wash: #3a1420;
   --bad-border: #7f2440;
+
+  --info: #60a5fa;
+  --info-wash: #0f1f3a;
+  --info-border: #1e3a8a;
 
   --violet: #c4b5fd;
 
@@ -1619,6 +1630,131 @@ a {
 }
 
 /* ---------------------------------------------------------------------------
+   Allocation panel
+
+   A donut and a list, side by side. The list IS the legend: every holding's
+   name, share and value are in it, so nothing on the chart has to reach
+   outside the ring - which is what used to overflow the card at twelve
+   holdings. See AllocationPie.jsx for why the outer labels went.
+   --------------------------------------------------------------------------- */
+.allocation__body {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) 1fr;
+  gap: var(--space-6);
+  align-items: center;
+}
+
+/* Positioning context for the centre caption. `min-width: 0` lets the grid
+   track shrink below the chart's intrinsic width on a narrow window. */
+.allocation__chart {
+  position: relative;
+  min-width: 0;
+}
+
+/* The percentage on each slice. `--on-brand` is white in the light theme and
+   near-black in the dark one - the same pairing the slice colours need, since
+   the light ramp is deep and the dark ramp is bright. */
+.allocation__slice-label {
+  fill: var(--on-brand);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* The hole in the donut: how many holdings the ring is cut into. */
+.allocation__center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.allocation__count {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.allocation__count-label {
+  color: var(--ink-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The legend. One row per holding, largest first, in the ring's order.
+   Capped in width so a short list does not put the number half a panel away
+   from its name; the dense variant lifts the cap because two columns need
+   the room. */
+.allocation__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  max-width: 34rem;
+  font-size: 0.8125rem;
+}
+
+/* Past six rows the list flows into two columns, so fifteen holdings sit
+   level with a 300px chart instead of stretching the panel to twice its
+   height. `break-inside: avoid` keeps a row from splitting across the gap. */
+.allocation__list--dense {
+  column-count: 2;
+  column-gap: var(--space-6);
+  max-width: none;
+}
+
+.allocation__row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-soft);
+  break-inside: avoid;
+}
+
+.allocation__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.allocation__ticker {
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.allocation__weight {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 3.5rem;
+}
+
+.allocation__value {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 5.5rem;
+}
+
+/* ---------------------------------------------------------------------------
    Rebalance panel
    --------------------------------------------------------------------------- */
 .rebalance .panel__body {
@@ -2682,6 +2818,240 @@ a {
 }
 
 /* ---------------------------------------------------------------------------
+   AI insights
+
+   A grid of short cards, each carrying its category three ways - a coloured
+   rail, an icon in a tinted circle, and the category printed as a label - so
+   the tone survives greyscale and a screen reader, the same rule the metric
+   cards follow. The text is the whole card; nothing else on it is allowed to
+   be larger than the sentence.
+
+   Tones: good (gain, teal), bad (loss, red), warn (risk, amber), info
+   (diversification, blue), neutral (a general note, ink). Blue is the one
+   tone that carries no verdict, which is exactly why diversification gets it.
+   --------------------------------------------------------------------------- */
+.insights__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6);
+}
+
+.insights__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.insight {
+  --insight-tone: var(--ink-faint);
+  --insight-wash: var(--surface-sunken);
+  --insight-border: var(--border-soft);
+
+  position: relative;
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5) var(--space-4) var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--insight-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition:
+    border-color var(--slow) var(--ease),
+    box-shadow var(--slow) var(--ease);
+}
+
+.insight:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+/* The tone rail, as on .card. */
+.insight::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--insight-tone);
+}
+
+.insight__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--insight-wash);
+  color: var(--insight-tone);
+}
+
+.insight__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.insight__content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.insight__label {
+  color: var(--insight-tone);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.insight__text {
+  color: var(--ink);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+.insight--good {
+  --insight-tone: var(--good);
+  --insight-wash: var(--good-wash);
+  --insight-border: var(--good-border);
+}
+
+.insight--bad {
+  --insight-tone: var(--bad);
+  --insight-wash: var(--bad-wash);
+  --insight-border: var(--bad-border);
+}
+
+.insight--warn {
+  --insight-tone: var(--warn);
+  --insight-wash: var(--warn-wash);
+  --insight-border: var(--warn-border);
+}
+
+.insight--info {
+  --insight-tone: var(--info);
+  --insight-wash: var(--info-wash);
+  --insight-border: var(--info-border);
+}
+
+/* .insight--neutral keeps the defaults: an ink rail on a sunken circle. */
+
+/* The loading placeholder borrows the card frame so the grid does not jump. */
+.insight--skeleton {
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.insights__idle {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 64ch;
+  color: var(--ink-soft);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.insights__idle-lead strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* The three promises. A list so they read as separate commitments, with the
+   brand tick rather than a bullet - these are guarantees, not caveats. */
+.insights__rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+}
+
+.insights__rules li {
+  position: relative;
+  padding-left: var(--space-6);
+}
+
+.insights__rules li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.45em;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--brand-wash);
+  border: 1px solid var(--brand-wash-strong);
+}
+
+.insights__rules li::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: calc(0.45em + 3px);
+  width: 5px;
+  height: 8px;
+  border-right: 2px solid var(--brand);
+  border-bottom: 2px solid var(--brand);
+  transform: rotate(45deg);
+}
+
+.insights__notice span {
+  font-weight: 400;
+}
+
+.insights__empty {
+  min-height: 140px;
+}
+
+/* Dead tickers, named so nobody wonders why the model never mentioned them. */
+.insights__excluded {
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+/* The disclaimer is the one line that is always on screen, in every state.
+   It sits in the panel foot rather than inside the body so a loading or error
+   state cannot push it out of view. */
+.insights__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.insights__disclaimer {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.insights__disclaimer svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--ink-muted);
+}
+
+.insights__meta {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
    Responsive
 
    Three stops. The dashboard is built for a laptop or a projector, and these
@@ -2695,7 +3065,8 @@ a {
     padding: var(--space-6) var(--space-4) var(--space-9);
   }
 
-  .rebalance .panel__body {
+  .rebalance .panel__body,
+  .allocation__body {
     grid-template-columns: 1fr;
   }
 
@@ -2805,6 +3176,13 @@ a {
 
 /* Very narrow: the metric grid becomes a single column rather than squeezing
    two 130px cards side by side, where the number no longer fits on one line. */
+@media (max-width: 600px) {
+  /* Two columns of ticker + share + value need more than a phone has. */
+  .allocation__list--dense {
+    column-count: 1;
+  }
+}
+
 @media (max-width: 420px) {
   .cards {
     grid-template-columns: 1fr;

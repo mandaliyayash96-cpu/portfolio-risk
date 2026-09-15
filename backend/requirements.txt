@@ -60,6 +60,15 @@ python-dotenv==1.2.3
 # test suite exercise the real check with no network.
 razorpay==2.0.1
 
+# AI insights — the risk report in plain English, via Gemini.
+# Deliberately NOT the google-generativeai SDK (deprecated upstream): the API
+# is one JSON POST, and `requests` gives an explicit timeout, one mockable
+# seam and a key that travels in a header rather than a URL. Imported ONLY by
+# insights/gemini.py, the same containment rule the three SDKs above live
+# under. `requests` was already a transitive dependency of firebase-admin;
+# it is pinned here because we now import it directly.
+requests==2.34.2
+
 # Phase 7 — React dev server talks to this API cross-origin.
 # django-cors-headers==4.*
 

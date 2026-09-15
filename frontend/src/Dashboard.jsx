@@ -63,6 +63,10 @@
  *                                   Switching tabs mid-edit must not throw
  *                                   away a half-typed position or the report
  *                                   saying which two rows failed.
+ *                 <InsightsPanel>   owns the last AI answer, which cost a
+ *                                   click and a model call to get. It is not
+ *                                   part of the poll, so nothing else would
+ *                                   bring it back.
  *
  *   unmounted     everything with a chart in it. Recharts measures its
  *                 container, and a container inside `display: none` measures
@@ -88,6 +92,7 @@ import DashboardTabs from './components/DashboardTabs'
 import { DEFAULT_TAB } from './components/dashboard-tabs'
 import Header from './components/Header'
 import HoldingsTable from './components/HoldingsTable'
+import InsightsPanel from './components/InsightsPanel'
 import ManageHoldings from './components/ManageHoldings'
 import PerformancePanel from './components/PerformancePanel'
 import RebalanceCard from './components/RebalanceCard'
@@ -395,6 +400,17 @@ export default function Dashboard({ portfolioId }) {
 
       <Section id="rebalance" active={tab === 'rebalance'}>
         <RebalanceCard data={rebalance} error={rebalanceError} isLoading={isLoading} />
+      </Section>
+
+      {/*
+        keepMounted: the insights are fetched on a click, not on the poll, and
+        each fetch spends a rate-limited model quota. Unmounting on a tab switch
+        would throw the answer away and invite a second click for the same
+        numbers. No chart inside, so the display:none measurement problem that
+        keeps the other analytical tabs unmounted does not apply here.
+      */}
+      <Section id="insights" active={tab === 'insights'} keepMounted>
+        <InsightsPanel portfolioId={portfolioId} />
       </Section>
 
       {/* keepMounted: the forms and the import report must survive a tab switch. */}

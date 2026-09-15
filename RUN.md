@@ -314,6 +314,7 @@ login UI does not exist yet — that is Part 2.
 FIREBASE_CREDENTIALS=<service-account-file>.json   # sits in backend/, also gitignored
 RAZORPAY_KEY_ID=...                                # loaded now, used in Part 2
 RAZORPAY_KEY_SECRET=...                            # never leaves the server
+GEMINI_API_KEY=...                                 # AI insights - see that section
 ```
 
 `config/settings.py` loads this with python-dotenv **before** it reads anything
@@ -587,10 +588,118 @@ Only order creation — an HTTPS call — is mocked.
 
 ---
 
+## AI insights (Gemini)
+
+The **Insights** tab explains the risk report in plain English. Press **Get AI
+insights** and the backend hands the SAME figures the dashboard shows - each
+holding's value, weight and unrealised P/L, plus volatility, beta, VaR, max
+drawdown, Sharpe and HHI - to Google Gemini and asks for three to six short
+observations. Nothing is recomputed, nothing is fetched from the news, and
+nothing runs on the 30-second poll: every call is a click.
+
+### Observations, never advice
+
+The one design rule of this feature, enforced three times over:
+
+1. **The prompt** (`insights/services.py:build_prompt`) says observations only,
+   forbids "buy" / "sell" / "you should" / "consider" / "recommend", and forbids
+   price predictions. The rules come before the numbers.
+2. **The response schema** (`insights/gemini.py:RESPONSE_SCHEMA`) pins the
+   model's output to `{category, text}` with `category` one of
+   `gain | loss | risk | diversification | general`. It cannot add a
+   "recommendation" field.
+3. **A server-side filter** (`insights/services.py:_is_advice`) drops any
+   sentence that still reads as a directive or a forecast before it leaves the
+   API. The prompt is a request; the filter is the guarantee.
+
+The disclaimer - *Insights are informational only, not financial advice.* - is
+appended by code on every response, including the failure ones. The model is
+never asked to remember it.
+
+### Configuration
+
+```
+GEMINI_API_KEY=...                  # backend/.env - required, from Google AI Studio (free tier)
+GEMINI_MODEL=gemini-3.6-flash       # optional; this is the default
+GEMINI_TIMEOUT_SECONDS=25           # optional
+```
+
+The key is sent as a request **header**, never in a URL, so it cannot land in
+an exception message or a log line. Nothing in the project logs it.
+
+**About the model name.** This feature was specified against
+`gemini-1.5-flash`, which the API no longer serves. `gemini-2.5-flash` is still
+*listed* by `models.list` but answers 404 "no longer available to new users" -
+so a listing is not proof a model works; only a `generateContent` call is.
+When 3.6 goes the same way, set `GEMINI_MODEL` in `.env` (or change the default
+in `config/settings.py`). Deliberately not `gemini-flash-latest`: a floating
+alias can change behaviour under a feature that has tests written against it.
+
+### Endpoint
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/insights/<portfolio_id>/` | Generate insights. **Requires the Firebase Bearer token**, and always reads the caller's own portfolio whatever id the URL names. |
+
+POST rather than GET because each call spends a rate-limited quota - it must be
+a deliberate click, not a prefetch. No body.
+
+### What a failure looks like
+
+**The model being unavailable is a 200, not an error.** A rate limit (the free
+tier is per-minute), a timeout, a missing key or an answer in the wrong shape
+all come back as:
+
+```json
+{"success": true, "data": {"available": false, "insights": [],
+ "reason": "rate_limited", "message": "AI insights unavailable right now, try again.",
+ "disclaimer": "Insights are informational only, not financial advice.", ...}}
+```
+
+`reason` is one of `rate_limited | unavailable | not_configured | bad_response`
+and the panel phrases each. **Nothing is retried on the server** - retrying
+into a per-minute quota is how a quota becomes a block; the user's next click
+is the retry.
+
+Only the portfolio's own data failures keep their error codes (`empty_portfolio`
+400, `insufficient_history` 422): those are not the model's fault and the
+dashboard already renders them. Holdings the risk report excluded for want of
+price data are named to the model as *unmeasured* and echoed in `excluded` -
+they are never valued or described.
+
+### Testing it
+
+`insights/tests/` mocks one seam - `insights.gemini.generate` - and asserts on
+everything around it: what the prompt says, how a well-formed answer is parsed,
+that a sentence like "You should sell TCS.NS" is dropped, and that a 429 or a
+timeout is a calm 200. `test_gemini.py` mocks `requests.post` one level lower
+to prove the key travels in the header and each HTTP status maps to the right
+reason. No test touches the network.
+
+```bash
+cd backend
+python -m pytest insights -q
+```
+
+To see it against the real API, sign in on the dashboard and press the button -
+or, with prices fetched for a portfolio:
+
+```bash
+cd backend
+python -c "
+import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings')
+import django; django.setup()
+from insights.services import build_ai_insights
+import json; print(json.dumps(build_ai_insights(1), indent=2))
+"
+```
+
+---
+
 ## Tests
 
-No test needs Redis, a worker, the network, a Firebase service account or a
-Razorpay account — the provider is stubbed through
+No test needs Redis, a worker, the network, a Firebase service account, a
+Razorpay account or a Gemini key — the provider is stubbed through
 `settings.MARKET_DATA_PROVIDER`, the tasks are called as plain functions, token
 verification is mocked at a single seam (`accounts.firebase.verify_token`), and
 of the payments only order creation is mocked (signature verification is a
@@ -601,4 +710,5 @@ cd backend
 python -m pytest -q
 python -m pytest accounts -q      # just the auth work
 python -m pytest payments -q      # the ₹9 gate
+python -m pytest insights -q      # the AI insights panel (Gemini mocked)
 ```

@@ -38,6 +38,9 @@ urlpatterns = [
     # Rule config and acknowledgement. The alert FEED is not here - it is a
     # WebSocket, routed by alerts/routing.py through config/asgi.py.
     path("api/alerts/", include("alerts.urls")),
+    # POST /api/insights/<id>/ - the risk report explained in plain English by
+    # Gemini. Authenticated, on demand, and always the caller's own portfolio.
+    path("api/insights/", include("insights.urls")),
 ]
 
 admin.site.site_header = "Clarisk Admin"

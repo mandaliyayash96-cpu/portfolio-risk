@@ -39,6 +39,11 @@ export const DASHBOARD_TABS = [
     hint: 'Markowitz suggestion against the current weights',
   },
   {
+    id: 'insights',
+    label: 'Insights',
+    hint: 'What the numbers show, in plain English — observations, not advice',
+  },
+  {
     id: 'holdings',
     label: 'Holdings',
     hint: 'Every position, and the forms that change them',

@@ -262,6 +262,52 @@ export function getPerformance(portfolioId) {
 }
 
 /* ---------------------------------------------------------------------------
+   AI insights
+   --------------------------------------------------------------------------- */
+
+/**
+ * How long to wait for the model.
+ *
+ * The backend abandons its own Gemini call after GEMINI_TIMEOUT_SECONDS (25s)
+ * and answers `available: false`; this sits above that plus the risk
+ * computation the service runs first, so a slow model is reported by the
+ * SERVER as "unavailable right now" rather than by the browser as a generic
+ * timeout. Two different sentences for the same event is the thing to avoid.
+ */
+const INSIGHTS_TIMEOUT_MS = 45_000
+
+/**
+ * Plain-English observations about the portfolio, generated on demand.
+ *
+ * A POST with no body: it changes nothing, but every call spends a rate-limited
+ * model quota, so it must be a deliberate click and not something a prefetch
+ * or a poll could trigger. Authenticated - the request interceptor above
+ * attaches the token, and a signed-out caller gets a 401.
+ *
+ * Resolves with one of two shapes, BOTH under HTTP 200:
+ *
+ *   {available: true,  insights: [{category, text}], model, generated_at,
+ *    portfolio, excluded, disclaimer}
+ *   {available: false, insights: [], reason, message, portfolio, excluded,
+ *    disclaimer}
+ *
+ * `available: false` is the model being unreachable (a free-tier rate limit,
+ * a timeout, no key on the server) and is not thrown - the panel shows
+ * `message` and offers a retry. What IS thrown is a data failure of the
+ * portfolio itself, with the same codes the risk report uses.
+ *
+ * `category` is one of gain | loss | risk | diversification | general. The
+ * text is observational by construction (the server filters anything that
+ * reads as advice) and `disclaimer` is the sentence to print under it.
+ *
+ * @throws {ApiError} `empty_portfolio`, `insufficient_history`, `not_found`,
+ *   or a 401 code when not signed in.
+ */
+export function getAiInsights(portfolioId) {
+  return postEnveloped(`/api/insights/${portfolioId}/`, {}, { timeout: INSIGHTS_TIMEOUT_MS })
+}
+
+/* ---------------------------------------------------------------------------
    Holdings entry
    ---------------------------------------------------------------------------
    The write half of the API, and the only calls on this page that can change

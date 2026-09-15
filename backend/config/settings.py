@@ -83,6 +83,7 @@ LOCAL_APPS = [
     "marketdata",   # PriceSnapshot / PriceHistory  (+ provider interface in Phase 2)
     "alerts",       # AlertRule / AlertEvent + evaluator, consumer, scan cmd
     "risk",         # pure engine + risk services   (+ optimizer in Phase 5)
+    "insights",     # the risk report in plain English, via Gemini (no models)
 ]
 
 INSTALLED_APPS = ASGI_APPS + DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -335,6 +336,33 @@ EDITING_UNLOCK_CURRENCY = os.environ.get("EDITING_UNLOCK_CURRENCY", "INR")
 EDITING_UNLOCK_TTL = timedelta(
     minutes=int(os.environ.get("EDITING_UNLOCK_TTL_MINUTES", "20"))
 )
+
+# ---------------------------------------------------------------------------
+# Gemini — the AI insights panel.
+#
+# The key is read here and handed to `insights/gemini.py`, the only module
+# that uses it. It is sent as a request HEADER, never in a URL, and nothing in
+# this project logs it - see that module for why the distinction matters.
+# An empty value is not fatal: the process boots, and /api/insights/ answers
+# `available: false` with reason `not_configured` rather than 500.
+#
+# THE MODEL NAME IS A SETTING, NOT A CONSTANT, because Google retires models.
+# gemini-1.5-flash - the original target for this feature - is no longer
+# served at all as of September 2026, and gemini-2.5-flash, while still
+# LISTED by the API, answers 404 "no longer available to new users" and names
+# 3.6-flash as its replacement. A `models.list` call is therefore not proof a
+# model works; only a generateContent call is. When 3.6 goes the same way,
+# this is the line to change - or set GEMINI_MODEL in .env without touching
+# source. (`gemini-flash-latest` also works, but a floating alias can change
+# the model's behaviour under a feature that has tests written against it.)
+# ---------------------------------------------------------------------------
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
+
+#: How long one generateContent call may take before it is abandoned. The
+#: frontend's own timeout for this endpoint sits above it, so a slow model is
+#: reported by the server ("unavailable right now") rather than by the browser.
+GEMINI_TIMEOUT_SECONDS = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "25"))
 
 # ---------------------------------------------------------------------------
 # Channels - the transport under the live alert feed.
